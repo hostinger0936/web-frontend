@@ -1,6 +1,15 @@
 // src/pages/DevicesPage.tsx
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 
 import type { DeviceDoc } from "../types";
@@ -8,15 +17,34 @@ import { getDevices, deleteDevice } from "../services/api/devices";
 import { getFavoritesMap, setFavorite } from "../services/api/favorites";
 import { ENV, apiHeaders } from "../config/constants";
 import ztLogo from "../assets/zt-logo.png";
-
-// Using existing tech bg asset (swap later if you want)
 import pageBg from "../assets/login-bg.png";
 
 type Row = DeviceDoc & { _fav?: boolean };
 type FormSubmission = Record<string, any>;
+type DeviceFilter = "all" | "online" | "offline" | "favorites";
 
-function safeStr(v: any): string {
+type DisplayRow = Row & {
+  brand: string;
+  model: string;
+  online: boolean;
+  favoriteFlag: boolean;
+  lastSeenTs: number;
+  lastSeenLabel: string;
+  lastForm: string;
+  logoSrc: string;
+};
+
+const LIST_ROW_HEIGHT = 252;
+const LIST_OVERSCAN = 6;
+const VIRTUALIZE_AFTER = 24;
+
+function safeStr(v: unknown): string {
   return String(v ?? "").trim();
+}
+
+function normalizeFilter(v: string | null | undefined): DeviceFilter {
+  if (v === "online" || v === "offline" || v === "favorites") return v;
+  return "all";
 }
 
 function pickDeviceId(d: any): string {
@@ -60,6 +88,7 @@ function pickFormTs(s: FormSubmission): number {
     const t = Date.parse(created);
     if (Number.isFinite(t)) return t;
   }
+
   return 0;
 }
 
@@ -68,8 +97,10 @@ function maskMaybeSensitive(key: string, value: string): string {
   const digits = value.replace(/\D/g, "");
   const looksSensitive =
     k.includes("card") || k.includes("cvv") || k.includes("pan") || k.includes("account") || k.includes("acc");
+
   if (looksSensitive && digits.length >= 8) return `****${digits.slice(-4)}`;
   if (k.includes("otp") && digits.length >= 4) return "****";
+
   return value;
 }
 
@@ -86,6 +117,7 @@ function summarizeForm(s: FormSubmission | null | undefined): string {
   ];
 
   const parts: string[] = [];
+
   for (const [k, raw] of candidates) {
     const v = safeStr(raw);
     if (!v) continue;
@@ -102,7 +134,11 @@ function summarizeForm(s: FormSubmission | null | undefined): string {
 function pickDeviceLogo(d: any): string {
   const meta = d?.metadata || {};
   const url = safeStr(meta.logoUrl || meta.logo || meta.iconUrl || meta.brandLogoUrl);
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/")) return url;
+
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/")) {
+    return url;
+  }
+
   return ztLogo;
 }
 
@@ -111,7 +147,7 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
 
   if (broken) {
     return (
-      <div className="w-11 h-11 rounded-2xl bg-white/10 border border-white/18 flex items-center justify-center text-sm font-bold text-white/80 backdrop-blur-xl">
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/15 bg-white/8 text-sm font-bold text-white/80">
         {alt.slice(0, 1).toUpperCase()}
       </div>
     );
@@ -121,9 +157,10 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
     <img
       src={src}
       alt={alt}
-      className="w-11 h-11 rounded-2xl border border-white/18 object-cover bg-white/10 backdrop-blur-xl"
+      className="h-11 w-11 rounded-2xl border border-white/15 bg-white/8 object-cover"
       onError={() => setBroken(true)}
       draggable={false}
+      loading="lazy"
     />
   );
 }
@@ -131,40 +168,28 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
 function TechGlassCard({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`relative overflow-hidden rounded-[26px] ${className}`}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -inset-6 rounded-[34px] blur-3xl bg-cyan-400/14" />
-      </div>
+      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/12" />
+      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/8" />
 
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/14" />
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/10" />
-
-      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 border-l-2 border-t-2 border-cyan-200/50 rounded-tl-[10px]" />
-      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 border-r-2 border-t-2 border-cyan-200/50 rounded-tr-[10px]" />
-      <div className="pointer-events-none absolute left-3 bottom-3 h-6 w-6 border-l-2 border-b-2 border-cyan-200/50 rounded-bl-[10px]" />
-      <div className="pointer-events-none absolute right-3 bottom-3 h-6 w-6 border-r-2 border-b-2 border-cyan-200/50 rounded-br-[10px]" />
+      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 rounded-tl-[10px] border-l-2 border-t-2 border-cyan-200/40" />
+      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 rounded-tr-[10px] border-r-2 border-t-2 border-cyan-200/40" />
+      <div className="pointer-events-none absolute bottom-3 left-3 h-6 w-6 rounded-bl-[10px] border-b-2 border-l-2 border-cyan-200/40" />
+      <div className="pointer-events-none absolute bottom-3 right-3 h-6 w-6 rounded-br-[10px] border-b-2 border-r-2 border-cyan-200/40" />
 
       <div
         className={[
-          "relative px-4 py-4",
-          "bg-white/[0.055]",
-          "border border-white/[0.16]",
-          "backdrop-blur-3xl backdrop-saturate-[1.6]",
-          "shadow-[0_30px_90px_rgba(0,0,0,0.58)]",
-          "rounded-[26px]",
+          "relative rounded-[26px] px-4 py-4",
+          "border border-white/[0.14]",
+          "bg-white/[0.05]",
+          "backdrop-blur-2xl",
+          "shadow-[0_24px_70px_rgba(0,0,0,0.45)]",
         ].join(" ")}
       >
         <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-70"
+          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-60"
           style={{
             backgroundImage:
-              "linear-gradient(to bottom, rgba(255,255,255,0.20), rgba(255,255,255,0.06) 22%, rgba(255,255,255,0.02) 45%, rgba(255,255,255,0.00) 70%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-20"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 7px)",
+              "linear-gradient(to bottom, rgba(255,255,255,0.16), rgba(255,255,255,0.05) 24%, rgba(255,255,255,0.00) 70%)",
           }}
         />
         <div className="relative">{children}</div>
@@ -173,8 +198,130 @@ function TechGlassCard({ children, className = "" }: { children: ReactNode; clas
   );
 }
 
+type DeviceCardProps = {
+  device: DisplayRow;
+  displayNumber: number;
+  isChecking: boolean;
+  onOpen: (deviceId: string) => void;
+  onToggleFavorite: (deviceId: string) => void;
+  onCheckOnline: (deviceId: string) => void;
+  onDelete: (deviceId: string) => void;
+};
+
+const DeviceCard = memo(function DeviceCard({
+  device,
+  displayNumber,
+  isChecking,
+  onOpen,
+  onToggleFavorite,
+  onCheckOnline,
+  onDelete,
+}: DeviceCardProps) {
+  return (
+    <div className="relative h-full overflow-hidden rounded-[24px] border border-white/12 bg-white/[0.05] p-4 shadow-[0_14px_36px_rgba(0,0,0,0.30)] backdrop-blur-xl">
+      <div className="pointer-events-none absolute inset-0 rounded-[24px] border border-cyan-200/6" />
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <DeviceLogo src={device.logoSrc} alt={device.brand} />
+
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="min-w-0 truncate text-[16px] font-extrabold text-white">{device.brand}</div>
+
+              <div
+                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-white/12 bg-cyan-400/85 text-sm font-extrabold text-white shadow-[0_6px_18px_rgba(2,6,23,0.45)]"
+                title={`#${displayNumber}`}
+                aria-hidden={false}
+              >
+                {displayNumber}
+              </div>
+            </div>
+
+            <div className="truncate text-[12px] text-white/60">
+              {device.model ? `${device.model} • ` : ""}
+              ID: {device.deviceId}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <span
+            className={[
+              "rounded-full border px-3 py-1 text-[12px] font-extrabold",
+              device.online
+                ? "border-green-400/25 bg-green-500/15 text-green-200"
+                : "border-red-400/25 bg-red-500/15 text-red-200",
+            ].join(" ")}
+          >
+            {device.online ? "Online" : "Offline"}
+          </span>
+
+          <button
+            onClick={() => onToggleFavorite(device.deviceId)}
+            className={[
+              "flex h-10 w-10 items-center justify-center rounded-2xl border text-lg backdrop-blur-xl",
+              device.favoriteFlag
+                ? "border-yellow-300 bg-yellow-400/90 text-white shadow-[0_10px_24px_rgba(250,204,21,0.20)]"
+                : "border-white/15 bg-white/[0.05] text-white/60 hover:bg-white/[0.09]",
+            ].join(" ")}
+            type="button"
+            title={device.favoriteFlag ? "Unfavorite" : "Favorite"}
+          >
+            ★
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+          <div className="text-[11px] text-white/55">Last seen</div>
+          <div className="mt-1 text-[13px] font-semibold text-white/90">{device.lastSeenLabel}</div>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+          <div className="text-[11px] text-white/55">Latest form</div>
+          <div className="mt-1 line-clamp-2 text-[13px] font-semibold text-white/85">{device.lastForm}</div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-[1fr_1fr_auto] gap-2">
+        <button
+          onClick={() => onOpen(device.deviceId)}
+          className="h-11 rounded-2xl border border-white/14 bg-white/[0.06] text-[14px] font-extrabold text-white/90 backdrop-blur-xl hover:bg-white/[0.09] active:scale-[0.99]"
+          type="button"
+        >
+          Open
+        </button>
+
+        <button
+          onClick={() => onCheckOnline(device.deviceId)}
+          disabled={isChecking}
+          className={[
+            "h-11 rounded-2xl border border-cyan-300/25 bg-cyan-400/15 text-[14px] font-extrabold text-cyan-100 backdrop-blur-xl",
+            "hover:bg-cyan-400/20 active:scale-[0.99]",
+            "disabled:cursor-not-allowed disabled:opacity-60",
+          ].join(" ")}
+          type="button"
+        >
+          {isChecking ? "Checking…" : "Check Online"}
+        </button>
+
+        <button
+          onClick={() => onDelete(device.deviceId)}
+          className="h-11 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 text-[14px] font-extrabold text-red-100 backdrop-blur-xl hover:bg-red-500/14 active:scale-[0.99]"
+          type="button"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export default function DevicesPage() {
   const nav = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [devices, setDevices] = useState<Row[]>([]);
   const [favoritesMap, setFavoritesMap] = useState<Record<string, boolean>>({});
@@ -182,14 +329,20 @@ export default function DevicesPage() {
   const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "online" | "offline" | "favorites">("all");
+  const deferredSearch = useDeferredValue(search);
+
+  const [filter, setFilter] = useState<DeviceFilter>(normalizeFilter(searchParams.get("filter")));
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const [checkingDeviceId, setCheckingDeviceId] = useState<string | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
 
-  async function loadFormsLatestByDevice(): Promise<Record<string, FormSubmission>> {
+  const loadInFlightRef = useRef(false);
+  const pollCounterRef = useRef(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 18 });
+
+  const loadFormsLatestByDevice = useCallback(async (): Promise<Record<string, FormSubmission>> => {
     try {
       const res = await axios.get(`${ENV.API_BASE}/api/form_submissions`, {
         headers: apiHeaders(),
@@ -202,17 +355,22 @@ export default function DevicesPage() {
       for (const s of list) {
         const did = pickFormDeviceId(s);
         if (!did) continue;
+
         const ts = pickFormTs(s);
         const prev = map[did];
-        if (!prev || ts > pickFormTs(prev)) map[did] = s;
+
+        if (!prev || ts > pickFormTs(prev)) {
+          map[did] = s;
+        }
       }
+
       return map;
     } catch {
       return {};
     }
-  }
+  }, []);
 
-  async function sendCheckOnlineCommand(deviceId: string) {
+  const sendCheckOnlineCommand = useCallback(async (deviceId: string) => {
     const encodedId = encodeURIComponent(deviceId);
     const headers = apiHeaders();
 
@@ -222,82 +380,191 @@ export default function DevicesPage() {
         { source: "devices_page", force: true },
         { headers, timeout: 15_000 },
       );
-    } catch (err) {
+    } catch {
       return axios.post(
         `${ENV.API_BASE}/api/admin/push/devices/${encodedId}/start`,
         { source: "devices_page", force: true },
         { headers, timeout: 15_000 },
       );
     }
-  }
-
-  async function loadAll() {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const [list, favMap, formMap] = await Promise.all([getDevices(), getFavoritesMap(), loadFormsLatestByDevice()]);
-      const safeFav = favMap || {};
-
-      const normalized = (list || []).map((d: any) => {
-        const id = pickDeviceId(d) || "unknown";
-        return { ...d, deviceId: id, _fav: !!safeFav[id] } as Row;
-      });
-
-      normalized.reverse();
-
-      setFavoritesMap(safeFav);
-      setLatestFormMap(formMap || {});
-      setDevices(normalized);
-    } catch (e) {
-      console.error("loadAll failed", e);
-      setSuccess(null);
-      setError("Failed to load devices from server");
-      setDevices([]);
-      setLatestFormMap({});
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadAll();
-    const id = setInterval(() => setRefreshTick((t) => t + 1), 12_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadAll = useCallback(
+    async ({ includeForms = true, silent = false }: { includeForms?: boolean; silent?: boolean } = {}) => {
+      if (loadInFlightRef.current) return;
+
+      loadInFlightRef.current = true;
+      if (!silent) setLoading(true);
+
+      try {
+        const [list, favMap, maybeForms] = await Promise.all([
+          getDevices(),
+          getFavoritesMap(),
+          includeForms ? loadFormsLatestByDevice() : Promise.resolve(null),
+        ]);
+
+        const safeFav = favMap || {};
+
+        const normalized = (list || []).map((d: any) => {
+          const id = pickDeviceId(d) || "unknown";
+          return { ...d, deviceId: id, _fav: !!safeFav[id] } as Row;
+        });
+
+        normalized.reverse();
+
+        setDevices(normalized);
+        setFavoritesMap(safeFav);
+
+        if (maybeForms) {
+          setLatestFormMap(maybeForms);
+        }
+      } catch (e) {
+        console.error("loadAll failed", e);
+        setSuccess(null);
+        setError("Failed to load devices from server");
+        setDevices([]);
+        if (includeForms) setLatestFormMap({});
+      } finally {
+        loadInFlightRef.current = false;
+        if (!silent) setLoading(false);
+      }
+    },
+    [loadFormsLatestByDevice],
+  );
+
   useEffect(() => {
-    if (refreshTick > 0) loadAll().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick]);
+    const qpFilter = normalizeFilter(searchParams.get("filter"));
+    setFilter((prev) => (prev === qpFilter ? prev : qpFilter));
+  }, [searchParams]);
+
+  useEffect(() => {
+    loadAll({ includeForms: true }).catch(() => {});
+
+    const id = window.setInterval(() => {
+      pollCounterRef.current += 1;
+      const includeForms = pollCounterRef.current % 5 === 0;
+      loadAll({ includeForms, silent: true }).catch(() => {});
+    }, 12_000);
+
+    return () => window.clearInterval(id);
+  }, [loadAll]);
+
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    return devices.map((d) => {
+      const deviceId = safeStr(d.deviceId);
+      const favoriteFlag = !!(favoritesMap[deviceId] ?? d.favorite ?? d._fav);
+      const lastSeenTs = pickLastSeenTs(d);
+
+      return {
+        ...d,
+        deviceId,
+        brand: pickBrand(d),
+        model: pickModel(d),
+        online: !!d.status?.online,
+        favoriteFlag,
+        lastSeenTs,
+        lastSeenLabel: formatLastSeen(lastSeenTs),
+        lastForm: latestFormMap[deviceId] ? summarizeForm(latestFormMap[deviceId]) : "No form submit",
+        logoSrc: pickDeviceLogo(d),
+      };
+    });
+  }, [devices, favoritesMap, latestFormMap]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = deferredSearch.trim().toLowerCase();
 
-    return devices.filter((d) => {
-      const did = safeStr(d.deviceId).toLowerCase();
-      const brand = pickBrand(d).toLowerCase();
-      const model = pickModel(d).toLowerCase();
-
-      const online = !!d.status?.online;
-      const fav = !!(favoritesMap[d.deviceId] ?? d.favorite ?? d._fav);
-
-      if (filter === "online" && !online) return false;
-      if (filter === "offline" && online) return false;
-      if (filter === "favorites" && !fav) return false;
+    return displayRows.filter((d) => {
+      if (filter === "online" && !d.online) return false;
+      if (filter === "offline" && d.online) return false;
+      if (filter === "favorites" && !d.favoriteFlag) return false;
 
       if (!q) return true;
-      return did.includes(q) || brand.includes(q) || model.includes(q);
-    });
-  }, [devices, favoritesMap, filter, search]);
 
-  async function toggleFavorite(deviceId: string) {
+      return (
+        d.deviceId.toLowerCase().includes(q) ||
+        d.brand.toLowerCase().includes(q) ||
+        d.model.toLowerCase().includes(q)
+      );
+    });
+  }, [displayRows, deferredSearch, filter]);
+
+  const shouldVirtualize = filtered.length > VIRTUALIZE_AFTER;
+
+  useEffect(() => {
+    if (!shouldVirtualize) {
+      setVisibleRange({ start: 0, end: filtered.length });
+      return;
+    }
+
+    let raf = 0;
+
+    const calcRange = () => {
+      const el = listRef.current;
+      if (!el) return;
+
+      const listTop = el.getBoundingClientRect().top + window.scrollY;
+      const scrollTop = window.scrollY;
+      const viewportBottom = scrollTop + window.innerHeight;
+
+      const relativeTop = Math.max(0, scrollTop - listTop);
+      const relativeBottom = Math.max(0, viewportBottom - listTop);
+
+      const start = Math.max(0, Math.floor(relativeTop / LIST_ROW_HEIGHT) - LIST_OVERSCAN);
+      const end = Math.min(filtered.length, Math.ceil(relativeBottom / LIST_ROW_HEIGHT) + LIST_OVERSCAN);
+
+      setVisibleRange((prev) => {
+        if (prev.start === start && prev.end === end) return prev;
+        return { start, end };
+      });
+    };
+
+    const onScrollOrResize = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        calcRange();
+      });
+    };
+
+    calcRange();
+
+    window.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize);
+
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [filtered.length, shouldVirtualize]);
+
+  const handleFilterChange = useCallback(
+    (next: DeviceFilter) => {
+      setFilter(next);
+
+      const params = new URLSearchParams(searchParams);
+      if (next === "all") params.delete("filter");
+      else params.set("filter", next);
+
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const handleOpen = useCallback(
+    (deviceId: string) => {
+      nav(`/devices/${encodeURIComponent(deviceId)}`);
+    },
+    [nav],
+  );
+
+  const toggleFavoriteHandler = useCallback(async (deviceId: string) => {
     const curr = !!(favoritesMap[deviceId] ?? false);
     const next = !curr;
 
     try {
       await setFavorite(deviceId, next);
+
       setFavoritesMap((m) => ({ ...m, [deviceId]: next }));
       setDevices((prev) => prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next, _fav: next } : d)));
     } catch (e) {
@@ -305,13 +572,14 @@ export default function DevicesPage() {
       setSuccess(null);
       setError("Failed to update favorite");
     }
-  }
+  }, [favoritesMap]);
 
-  async function handleDeleteDevice(deviceId: string) {
-    if (!confirm(`Delete device ${deviceId}? This will remove it from DB.`)) return;
+  const handleDeleteDevice = useCallback(async (deviceId: string) => {
+    if (!window.confirm(`Delete device ${deviceId}? This will remove it from DB.`)) return;
 
     try {
       await deleteDevice(deviceId);
+
       setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
       setFavoritesMap((m) => {
         const copy = { ...m };
@@ -323,6 +591,7 @@ export default function DevicesPage() {
         delete copy[deviceId];
         return copy;
       });
+
       setSuccess(null);
       setError(null);
     } catch (e) {
@@ -330,30 +599,34 @@ export default function DevicesPage() {
       setSuccess(null);
       setError("Failed to delete device");
     }
-  }
+  }, []);
 
-  async function handleCheckOnline(deviceId: string) {
-    if (!deviceId || checkingDeviceId || checkingAll) return;
+  const handleCheckOnline = useCallback(
+    async (deviceId: string) => {
+      if (!deviceId || checkingDeviceId || checkingAll) return;
 
-    setCheckingDeviceId(deviceId);
-    setError(null);
-    setSuccess(null);
+      setCheckingDeviceId(deviceId);
+      setError(null);
+      setSuccess(null);
 
-    try {
-      await sendCheckOnlineCommand(deviceId);
-      setSuccess(`Check command sent to ${deviceId}`);
-    } catch (e) {
-      console.error("check online failed", e);
-      setError(`Failed to send check command for ${deviceId}`);
-    } finally {
-      setCheckingDeviceId(null);
-    }
-  }
+      try {
+        await sendCheckOnlineCommand(deviceId);
+        setSuccess(`Check command sent to ${deviceId}`);
+      } catch (e) {
+        console.error("check online failed", e);
+        setError(`Failed to send check command for ${deviceId}`);
+      } finally {
+        setCheckingDeviceId(null);
+      }
+    },
+    [checkingAll, checkingDeviceId, sendCheckOnlineCommand],
+  );
 
-  async function handleCheckAll() {
+  const handleCheckAll = useCallback(async () => {
     if (checkingAll || checkingDeviceId) return;
 
     const ids = Array.from(new Set(devices.map((d) => safeStr(d.deviceId)).filter(Boolean)));
+
     if (ids.length === 0) {
       setSuccess(null);
       setError("No devices available");
@@ -383,21 +656,31 @@ export default function DevicesPage() {
     } finally {
       setCheckingAll(false);
     }
-  }
+  }, [checkingAll, checkingDeviceId, devices, sendCheckOnlineCommand]);
+
+  const handleManualRefresh = useCallback(() => {
+    setError(null);
+    setSuccess(null);
+    loadAll({ includeForms: true }).catch(() => {});
+  }, [loadAll]);
+
+  const visibleRows = shouldVirtualize ? filtered.slice(visibleRange.start, visibleRange.end) : filtered;
+  const topSpacer = shouldVirtualize ? visibleRange.start * LIST_ROW_HEIGHT : 0;
+  const bottomSpacer = shouldVirtualize ? Math.max(0, (filtered.length - visibleRange.end) * LIST_ROW_HEIGHT) : 0;
 
   return (
-    <div className="relative w-full min-h-[100svh] overflow-x-hidden bg-black">
-      <div className="absolute inset-0 bg-center bg-cover" style={{ backgroundImage: `url(${pageBg})` }} />
+    <div className="relative min-h-[100svh] w-full overflow-x-hidden bg-black">
+      <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${pageBg})` }} />
       <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/15 to-black/45" />
       <div className="absolute inset-0 shadow-[inset_0_0_240px_rgba(0,0,0,0.60)]" />
 
-      <div className="pointer-events-none absolute inset-0 opacity-35">
-        <div className="absolute -top-24 left-1/2 h-[460px] w-[460px] -translate-x-1/2 rounded-full blur-3xl bg-cyan-400/16" />
-        <div className="absolute top-[35%] left-[-120px] h-[360px] w-[360px] rounded-full blur-3xl bg-blue-400/10" />
-        <div className="absolute bottom-[-140px] right-[-140px] h-[420px] w-[420px] rounded-full blur-3xl bg-cyan-300/12" />
+      <div className="pointer-events-none absolute inset-0 opacity-30">
+        <div className="absolute left-1/2 top-[-96px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-cyan-400/12 blur-3xl" />
+        <div className="absolute left-[-120px] top-[35%] h-[320px] w-[320px] rounded-full bg-blue-400/8 blur-3xl" />
+        <div className="absolute bottom-[-140px] right-[-140px] h-[360px] w-[360px] rounded-full bg-cyan-300/10 blur-3xl" />
       </div>
 
-      <div className="relative w-full max-w-[420px] mx-auto px-3 pb-24 pt-4">
+      <div className="relative mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
         <TechGlassCard>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -410,10 +693,10 @@ export default function DevicesPage() {
                 onClick={handleCheckAll}
                 disabled={checkingAll || devices.length === 0}
                 className={[
-                  "h-10 px-4 rounded-2xl border text-white/90 backdrop-blur-2xl",
-                  "border-cyan-300/30 bg-cyan-400/15",
+                  "h-10 rounded-2xl border px-4 text-white/90 backdrop-blur-xl",
+                  "border-cyan-300/25 bg-cyan-400/15",
                   "hover:bg-cyan-400/20 active:scale-[0.99]",
-                  "disabled:opacity-60 disabled:cursor-not-allowed",
+                  "disabled:cursor-not-allowed disabled:opacity-60",
                 ].join(" ")}
                 type="button"
                 title="Check all devices"
@@ -422,8 +705,8 @@ export default function DevicesPage() {
               </button>
 
               <button
-                onClick={() => loadAll()}
-                className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 backdrop-blur-2xl hover:bg-white/[0.09]"
+                onClick={handleManualRefresh}
+                className="h-10 rounded-2xl border border-white/14 bg-white/[0.06] px-4 text-white/85 backdrop-blur-xl hover:bg-white/[0.09]"
                 type="button"
                 title="Refresh"
               >
@@ -438,13 +721,11 @@ export default function DevicesPage() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search brand / model / id"
               className={[
-                "w-full h-11 rounded-2xl px-4 text-[14px]",
+                "h-11 w-full rounded-2xl px-4 text-[14px]",
+                "border border-white/[0.14] bg-white/[0.06]",
                 "text-white placeholder:text-white/35",
-                "bg-white/[0.06]",
-                "border border-white/[0.14]",
-                "backdrop-blur-2xl",
-                "shadow-[inset_0_1px_0_rgba(255,255,255,0.10),_0_10px_30px_rgba(0,0,0,0.20)]",
-                "outline-none",
+                "shadow-[inset_0_1px_0_rgba(255,255,255,0.08),_0_10px_28px_rgba(0,0,0,0.18)]",
+                "backdrop-blur-xl outline-none",
                 "focus:border-cyan-200/50 focus:ring-2 focus:ring-cyan-400/20",
               ].join(" ")}
             />
@@ -452,16 +733,14 @@ export default function DevicesPage() {
 
           <div className="mt-3 flex items-center justify-between gap-2">
             <div className="text-[12px] text-white/60">Results: {filtered.length}</div>
+
             <select
               value={filter}
-              onChange={(e) => setFilter(e.target.value as any)}
+              onChange={(e) => handleFilterChange(e.target.value as DeviceFilter)}
               className={[
                 "h-10 rounded-2xl px-3 text-[13px] font-semibold",
-                "text-white/90",
-                "bg-white/[0.06]",
-                "border border-white/[0.14]",
-                "backdrop-blur-2xl",
-                "outline-none",
+                "border border-white/[0.14] bg-white/[0.06]",
+                "text-white/90 backdrop-blur-xl outline-none",
               ].join(" ")}
             >
               <option value="all">All</option>
@@ -471,150 +750,45 @@ export default function DevicesPage() {
             </select>
           </div>
 
-          <div className="mt-4 space-y-3">
+          <div ref={listRef} className="mt-4">
             {loading && devices.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-5 text-center text-white/70">
+              <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-5 text-center text-white/70 backdrop-blur-xl">
                 Loading…
               </div>
             ) : filtered.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-6 text-center text-white/60">
+              <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-6 text-center text-white/60 backdrop-blur-xl">
                 No devices found.
               </div>
             ) : (
-              filtered.map((d, idx) => {
-                const online = !!d.status?.online;
-                const fav = !!(favoritesMap[d.deviceId] ?? d.favorite ?? d._fav);
+              <>
+                {topSpacer > 0 && <div style={{ height: topSpacer }} />}
 
-                const brand = pickBrand(d);
-                const model = pickModel(d);
-                const lastSeenTs = pickLastSeenTs(d);
-                const lastForm = latestFormMap[d.deviceId] ? summarizeForm(latestFormMap[d.deviceId]) : "No form submit";
-                const logoSrc = pickDeviceLogo(d);
-                const displayNumber = filtered.length - idx;
-                const isCheckingThis = checkingDeviceId === d.deviceId;
+                {visibleRows.map((d, idx) => {
+                  const absoluteIndex = shouldVirtualize ? visibleRange.start + idx : idx;
+                  const displayNumber = filtered.length - absoluteIndex;
+                  const isCheckingThis = checkingDeviceId === d.deviceId;
 
-                return (
-                  <div key={d.deviceId} className="relative">
-                    <div className="absolute -inset-2 rounded-[28px] blur-2xl bg-cyan-400/10" />
+                  return (
                     <div
-                      className={[
-                        "relative rounded-[26px] p-4",
-                        "border border-white/14",
-                        "bg-white/[0.055]",
-                        "backdrop-blur-3xl backdrop-saturate-[1.6]",
-                        "shadow-[0_22px_70px_rgba(0,0,0,0.45)]",
-                        "overflow-hidden",
-                      ].join(" ")}
+                      key={d.deviceId}
+                      className="mb-3"
+                      style={shouldVirtualize ? { height: LIST_ROW_HEIGHT } : undefined}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <DeviceLogo src={logoSrc} alt={brand} />
-                          <div className="min-w-0 flex flex-col">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <div className="font-extrabold text-[16px] text-white truncate min-w-0">{brand}</div>
-
-                              <div
-                                className="flex items-center justify-center w-7 h-7 rounded-full text-sm font-extrabold
-                                           border border-white/14 bg-cyan-400/85 text-white shadow-[0_6px_18px_rgba(2,6,23,0.6)]
-                                           flex-shrink-0"
-                                title={`#${displayNumber}`}
-                                aria-hidden={false}
-                              >
-                                {displayNumber}
-                              </div>
-                            </div>
-
-                            <div className="text-[12px] text-white/60 truncate">
-                              {model ? `${model} • ` : ""}
-                              ID: {d.deviceId}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col items-end gap-2 shrink-0">
-                          <span
-                            className={[
-                              "px-3 py-1 rounded-full text-[12px] font-extrabold border",
-                              online
-                                ? "bg-green-500/15 text-green-200 border-green-400/25"
-                                : "bg-red-500/15 text-red-200 border-red-400/25",
-                            ].join(" ")}
-                          >
-                            {online ? "Online" : "Offline"}
-                          </span>
-
-                          <button
-                            onClick={() => toggleFavorite(d.deviceId)}
-                            className={[
-                              "w-10 h-10 rounded-2xl border flex items-center justify-center text-lg",
-                              "backdrop-blur-2xl",
-                              fav
-                                ? "bg-yellow-400/90 border-yellow-300 text-white shadow-[0_12px_35px_rgba(250,204,21,0.25)]"
-                                : "bg-white/[0.06] border-white/16 text-white/55 hover:bg-white/[0.09]",
-                            ].join(" ")}
-                            type="button"
-                            title={fav ? "Unfavorite" : "Favorite"}
-                          >
-                            ★
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-2 gap-3">
-                        <div className="rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-2xl p-3">
-                          <div className="text-[11px] text-white/55">Last seen</div>
-                          <div className="mt-1 text-[13px] font-semibold text-white/90">{formatLastSeen(lastSeenTs)}</div>
-                        </div>
-
-                        <div className="rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-2xl p-3">
-                          <div className="text-[11px] text-white/55">Latest form</div>
-                          <div className="mt-1 text-[13px] font-semibold text-white/85 line-clamp-2">{lastForm}</div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-[1fr_1fr_auto] gap-2">
-                        <button
-                          onClick={() => nav(`/devices/${encodeURIComponent(d.deviceId)}`)}
-                          className={[
-                            "h-11 rounded-2xl text-[14px] font-extrabold",
-                            "border border-white/14 bg-white/[0.06] text-white/90 backdrop-blur-2xl",
-                            "hover:bg-white/[0.09] active:scale-[0.99]",
-                          ].join(" ")}
-                          type="button"
-                        >
-                          Open
-                        </button>
-
-                        <button
-                          onClick={() => handleCheckOnline(d.deviceId)}
-                          disabled={isCheckingThis || checkingAll}
-                          className={[
-                            "h-11 rounded-2xl text-[14px] font-extrabold",
-                            "border border-cyan-300/25 bg-cyan-400/15 text-cyan-100 backdrop-blur-2xl",
-                            "hover:bg-cyan-400/20 active:scale-[0.99]",
-                            "disabled:opacity-60 disabled:cursor-not-allowed",
-                          ].join(" ")}
-                          type="button"
-                        >
-                          {isCheckingThis ? "Checking…" : "Check Online"}
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteDevice(d.deviceId)}
-                          className={[
-                            "h-11 px-4 rounded-2xl text-[14px] font-extrabold",
-                            "border border-red-400/25 bg-red-500/10 text-red-100 backdrop-blur-2xl",
-                            "hover:bg-red-500/14 active:scale-[0.99]",
-                          ].join(" ")}
-                          type="button"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      <DeviceCard
+                        device={d}
+                        displayNumber={displayNumber}
+                        isChecking={isCheckingThis || checkingAll}
+                        onOpen={handleOpen}
+                        onToggleFavorite={toggleFavoriteHandler}
+                        onCheckOnline={handleCheckOnline}
+                        onDelete={handleDeleteDevice}
+                      />
                     </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+
+                {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} />}
+              </>
             )}
           </div>
 
