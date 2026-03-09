@@ -3,20 +3,20 @@ import { useEffect, useState } from "react";
 import { logout, getLoggedInUser } from "../../services/api/auth";
 import WsIndicator from "../misc/WsIndicator";
 
-function BrandLogo({ size = 44 }: { size?: number }) {
+function BrandLogo({ size = 40 }: { size?: number }) {
   return (
     <img
       src="/zt-logo.png"
       alt="ZeroTrace"
       width={size}
       height={size}
-      className="rounded-2xl object-cover shrink-0 border border-white/14 bg-white/10"
+      className="shrink-0 rounded-xl border border-slate-200 bg-white object-cover"
       draggable={false}
     />
   );
 }
 
-function GlassPill({
+function ActionPill({
   children,
   className = "",
   as = "div",
@@ -39,11 +39,9 @@ function GlassPill({
       title={title}
       type={as === "button" ? "button" : undefined}
       className={[
-        "inline-flex items-center gap-2 rounded-xl px-3 py-2",
-        // dark glass
-        "border border-white/14 bg-black/35 backdrop-blur-2xl",
-        "shadow-[0_18px_60px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]",
-        as !== "div" ? "hover:bg-black/45 active:scale-[0.99]" : "",
+        "inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2",
+        "text-slate-700 shadow-[0_4px_14px_rgba(15,23,42,0.05)] transition",
+        as !== "div" ? "hover:bg-slate-50 active:scale-[0.99]" : "",
         className,
       ].join(" ")}
     >
@@ -62,58 +60,46 @@ export default function Topbar() {
   }, []);
 
   return (
-    <header className="relative w-full">
-      {/* dark glass bar */}
-      <div className="absolute inset-0 bg-black/55 backdrop-blur-3xl border-b border-white/10" />
-      {/* glossy top line */}
-      <div className="pointer-events-none absolute inset-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" />
-      {/* cyan glow */}
-      <div className="pointer-events-none absolute -inset-x-10 -top-10 h-24 blur-3xl bg-cyan-400/18" />
-
-      <div className="relative mx-auto max-w-[420px] px-3 py-3">
+    <header className="sticky top-0 z-[40] w-full border-b border-slate-200 bg-white/90 backdrop-blur-md">
+      <div className="mx-auto max-w-[420px] px-3 py-3 md:max-w-none md:px-4">
         <div className="flex items-start justify-between gap-3">
-          {/* Left brand */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="relative">
-              <div className="absolute -inset-2 rounded-2xl blur-xl bg-cyan-400/18" />
-              <div className="relative">
-                <BrandLogo size={44} />
-              </div>
-            </div>
+          <div className="flex min-w-0 items-center gap-3">
+            <BrandLogo size={40} />
 
             <div className="min-w-0 leading-tight">
-              <div className="text-[12px] font-semibold text-white/75 truncate">ZeroTrace</div>
-              <div className="text-[16px] font-extrabold text-white truncate">Admin Panel</div>
-              <div className="text-[11px] text-white/45 truncate">Realtime dashboard</div>
+              <div className="truncate text-[12px] font-semibold text-slate-500">ZeroTrace</div>
+              <div className="truncate text-[16px] font-extrabold text-slate-900">Admin Panel</div>
+              <div className="truncate text-[11px] text-slate-400">Realtime dashboard</div>
             </div>
           </div>
 
-          {/* Right actions */}
-          <div className="flex items-center gap-2 shrink-0">
-            <GlassPill className="px-3">
+          <div className="flex shrink-0 items-center gap-2">
+            <ActionPill className="px-3">
               <WsIndicator />
-            </GlassPill>
+            </ActionPill>
 
-            <GlassPill
+            <ActionPill
               as="a"
               href="/settings"
-              className="text-[12px] font-extrabold text-white/85"
+              className="text-[12px] font-bold text-slate-700"
               title="Settings"
             >
               Settings
-            </GlassPill>
+            </ActionPill>
 
             <div className="hidden sm:block">
-              <GlassPill className="flex-col items-start gap-0 px-3 py-2">
-                <div className="text-[10px] text-white/45 leading-none">Logged in</div>
-                <div className="text-[12px] font-extrabold text-white/85 leading-tight">{username}</div>
-              </GlassPill>
+              <ActionPill className="flex-col items-start gap-0 px-3 py-2">
+                <div className="text-[10px] leading-none text-slate-400">Logged in</div>
+                <div className="text-[12px] font-extrabold leading-tight text-slate-800">
+                  {username}
+                </div>
+              </ActionPill>
             </div>
 
-            <GlassPill
+            <ActionPill
               as="button"
               title="Logout"
-              className="text-[12px] font-extrabold text-white/85"
+              className="text-[12px] font-bold text-slate-700"
               onClick={() => {
                 if (!confirm("Logout?")) return;
                 logout();
@@ -122,7 +108,7 @@ export default function Topbar() {
             >
               <span aria-hidden>⎋</span>
               <span className="hidden sm:inline">Logout</span>
-            </GlassPill>
+            </ActionPill>
           </div>
         </div>
       </div>
