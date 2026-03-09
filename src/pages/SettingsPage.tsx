@@ -5,12 +5,12 @@ import { STORAGE_KEYS } from "../config/constants";
 import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 
 /**
- * SettingsPage.tsx — LIGHTWEIGHT / STABLE VERSION
+ * SettingsPage.tsx — STABLE TAP / NO OVERLAY VERSION
  * - Same features preserved
  * - Global Admin Phone
  * - Change Password
- * - Heavy background/image removed
- * - Lightweight surfaces for smoother rendering
+ * - Adds stronger stacking order so bottom nav / overlays don't steal taps
+ * - Extra bottom safe spacing to avoid fixed-nav overlap
  */
 
 function safeTrim(v: any) {
@@ -30,7 +30,7 @@ function SurfaceCard({ children, className = "" }: { children: ReactNode; classN
   return (
     <div
       className={[
-        "rounded-[24px] border border-slate-200 bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.06)]",
+        "relative z-[20] rounded-[24px] border border-slate-200 bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.06)]",
         className,
       ].join(" ")}
     >
@@ -64,7 +64,7 @@ function GlassInput({
         type={type}
         disabled={disabled}
         className={[
-          "h-11 w-full rounded-2xl px-4 text-[14px]",
+          "relative z-[30] h-11 w-full rounded-2xl px-4 text-[14px]",
           "border border-slate-200 bg-white",
           "text-slate-900 placeholder:text-slate-400",
           "outline-none transition",
@@ -219,7 +219,7 @@ export default function SettingsPage() {
 
   return (
     <AnimatedAppBackground>
-      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+      <div className="relative z-[40] mx-auto w-full max-w-[420px] px-3 pb-36 pt-4">
         <SurfaceCard className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -229,7 +229,7 @@ export default function SettingsPage() {
 
             <button
               onClick={loadAll}
-              className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
+              className="relative z-[50] h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
               type="button"
               title="Refresh"
             >
@@ -282,7 +282,7 @@ export default function SettingsPage() {
                   <button
                     onClick={savePhone}
                     disabled={savingPhone}
-                    className="h-11 flex-1 rounded-2xl border border-slate-900 bg-slate-900 text-[15px] font-extrabold text-white disabled:opacity-60"
+                    className="relative z-[50] h-11 flex-1 rounded-2xl border border-slate-900 bg-slate-900 text-[15px] font-extrabold text-white disabled:opacity-60"
                     type="button"
                   >
                     {savingPhone ? "Saving…" : "Save"}
@@ -291,7 +291,7 @@ export default function SettingsPage() {
                   <button
                     onClick={clearPhoneFromServer}
                     disabled={savingPhone}
-                    className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                    className="relative z-[50] h-11 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
                     type="button"
                     title="Clear value from server"
                   >
@@ -336,7 +336,7 @@ export default function SettingsPage() {
                   <button
                     onClick={handleChangePassword}
                     disabled={savingPass}
-                    className="h-11 flex-1 rounded-2xl border border-slate-900 bg-slate-900 text-[15px] font-extrabold text-white disabled:opacity-60"
+                    className="relative z-[50] h-11 flex-1 rounded-2xl border border-slate-900 bg-slate-900 text-[15px] font-extrabold text-white disabled:opacity-60"
                     type="button"
                   >
                     {savingPass ? "Updating…" : "Update Password"}
@@ -350,7 +350,7 @@ export default function SettingsPage() {
                       setError(null);
                       setOkMsg(null);
                     }}
-                    className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
+                    className="relative z-[50] h-11 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                     type="button"
                   >
                     Clear
