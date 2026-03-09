@@ -27,26 +27,35 @@ import { getLicenseSnapshot } from "./utils/license";
 type ProtectedProps = React.PropsWithChildren<{ redirectTo?: string }>;
 
 const ProtectedRoute = ({ children, redirectTo = "/login" }: ProtectedProps) => {
-  // hard stop: expired => always show expired page
   if (getLicenseSnapshot().isExpired) return <Navigate to="/expired" replace />;
-
   if (!isLoggedIn()) return <Navigate to={redirectTo} replace />;
   return <>{children}</>;
 };
 
 const Layout = () => {
   return (
-    <div className="min-h-screen flex bg-gray-50">
-      <Sidebar />
+    <div className="min-h-screen bg-[#f6f8fb] text-slate-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1600px]">
+        <Sidebar />
 
-      <div className="flex-1 flex flex-col">
-        <Topbar />
-        <main className="p-4 flex-1 overflow-auto pb-20 md:pb-4">
-          <Outlet />
-        </main>
-        <MobileBottomNav />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Topbar />
+
+          <main
+            className={[
+              "flex-1 min-w-0",
+              "overflow-x-hidden overflow-y-auto",
+              "px-0 py-0",
+              "pb-[calc(var(--mobile-bottom-nav-height,64px)+env(safe-area-inset-bottom)+8px)]",
+              "md:pb-4",
+            ].join(" ")}
+          >
+            <Outlet />
+          </main>
+        </div>
       </div>
 
+      <MobileBottomNav />
       <Toast />
     </div>
   );
@@ -58,10 +67,7 @@ export default function App() {
   return (
     <LicenseGate>
       <Routes>
-        {/* Always accessible */}
         <Route path="/expired" element={<ExpiredPage />} />
-
-        {/* Login: if expired, LicenseGate/Protected will still force /expired */}
         <Route path="/login" element={<LoginPage />} />
 
         <Route
@@ -83,8 +89,10 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 
-        {/* Unknown route */}
-        <Route path="*" element={<Navigate to={expired ? "/expired" : isLoggedIn() ? "/" : "/login"} replace />} />
+        <Route
+          path="*"
+          element={<Navigate to={expired ? "/expired" : isLoggedIn() ? "/" : "/login"} replace />}
+        />
       </Routes>
     </LicenseGate>
   );
