@@ -1,158 +1,219 @@
-import { ENV } from "../../config/constants";
+type WsMessage = {
+  type?: string;
+  event?: string;
+  name?: string;
+  deviceId?: string;
+  timestamp?: number;
+  data?: any;
+  payload?: any;
+  [key: string]: any;
+};
 
-/**
- * wsService.ts — FULL & FINAL (UPDATED)
- *
- * Fix:
- * - onMessage() cleanup returns void (OK)
- * - connect() guarded + clears reconnect timer when needed
- * - ✅ sendSms dedupe: prevents duplicate SMS sends within a short window
- */
-
-type WsMsg = Record<string, any>;
-type Handler = (msg: WsMsg) => void;
+type MessageHandler = (msg: WsMessage) => void;
+type StatusHandler = (connected: boolean) => void;
 
 class WsService {
   private ws: WebSocket | null = null;
-  private handlers: Set<Handler> = new Set();
-  private reconnectTimer: number | null = null;
-  private shouldStop = false;
   private connected = false;
+  private reconnectTimer: number | null = null;
+  private manuallyClosed = false;
+  private pingTimer: number | null = null;
+  private connectAttemptId = 0;
 
-  // prevents rapid duplicate sendSms (common in reconnect/strictmode/double-submit edge cases)
-  private lastSmsKey: string | null = null;
-  private lastSmsAt = 0;
+  private messageHandlers = new Set<MessageHandler>();
+  private statusHandlers = new Set<StatusHandler>();
 
-  private buildWsUrl(): string {
-    try {
-      const base = ENV.API_BASE || window.location.origin;
-      const u = new URL(base);
-      const proto = u.protocol === "https:" ? "wss" : "ws";
-      const path = ENV.WS_ADMIN_PATH.startsWith("/") ? ENV.WS_ADMIN_PATH : `/${ENV.WS_ADMIN_PATH}`;
-      return `${proto}://${u.host}${path}`;
-    } catch {
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      const path = ENV.WS_ADMIN_PATH.startsWith("/") ? ENV.WS_ADMIN_PATH : `/${ENV.WS_ADMIN_PATH}`;
-      return `${proto}://${window.location.host}${path}`;
-    }
+  private readonly reconnectDelayMs = 2500;
+  private readonly pingIntervalMs = 15000;
+
+  private getBaseWsUrl(): string {
+    const envUrl = String(import.meta.env.VITE_WS_URL || "").trim();
+    if (envUrl) return envUrl.replace(/\/+$/, "");
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${protocol}://${window.location.host}/ws`;
+  }
+
+  private getAdminSocketUrl(): string {
+    return `${this.getBaseWsUrl()}/admin`;
   }
 
   private emitStatus(connected: boolean) {
+    this.connected = connected;
+
     try {
-      window.dispatchEvent(new CustomEvent("zerotrace:ws", { detail: { connected } }));
+      window.dispatchEvent(
+        new CustomEvent("zerotrace:ws", {
+          detail: { connected },
+        }),
+      );
     } catch {
       // ignore
     }
+
+    this.statusHandlers.forEach((handler) => {
+      try {
+        handler(connected);
+      } catch {
+        // ignore
+      }
+    });
   }
 
-  isConnected(): boolean {
-    return this.connected === true && this.ws?.readyState === WebSocket.OPEN;
+  private emitMessage(msg: WsMessage) {
+    this.messageHandlers.forEach((handler) => {
+      try {
+        handler(msg);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimer != null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private clearPingTimer() {
+    if (this.pingTimer != null) {
+      window.clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  private startPing() {
+    this.clearPingTimer();
+
+    this.pingTimer = window.setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+      try {
+        this.ws.send(
+          JSON.stringify({
+            type: "ping",
+            timestamp: Date.now(),
+          }),
+        );
+      } catch {
+        // ignore
+      }
+    }, this.pingIntervalMs);
+  }
+
+  private scheduleReconnect() {
+    if (this.manuallyClosed) return;
+    if (this.reconnectTimer != null) return;
+
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, this.reconnectDelayMs);
   }
 
   connect() {
-    // ✅ if a reconnect timer exists, do not stack more connects
-    if (this.reconnectTimer) {
-      // we still allow current connect attempt to proceed; timer will be cleared on open
-    }
-
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
-    this.shouldStop = false;
+    this.manuallyClosed = false;
+    this.clearReconnectTimer();
 
-    const url = this.buildWsUrl();
+    const attemptId = ++this.connectAttemptId;
+
     try {
-      this.ws = new WebSocket(url);
-    } catch {
-      this.scheduleReconnect();
-      return;
-    }
+      const ws = new WebSocket(this.getAdminSocketUrl());
+      this.ws = ws;
 
-    this.ws.onopen = () => {
-      this.connected = true;
-      this.emitStatus(true);
+      ws.onopen = () => {
+        if (attemptId !== this.connectAttemptId) return;
+        this.emitStatus(true);
+        this.startPing();
+      };
 
-      // ✅ once connected, clear any pending reconnect timer
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
+      ws.onmessage = (ev) => {
+        if (attemptId !== this.connectAttemptId) return;
 
-      try {
-        this.ws?.send(JSON.stringify({ type: "ping" }));
-      } catch {}
-    };
-
-    this.ws.onclose = () => {
-      this.connected = false;
-      this.emitStatus(false);
-      if (!this.shouldStop) this.scheduleReconnect();
-    };
-
-    this.ws.onerror = () => {
-      this.connected = false;
-      this.emitStatus(false);
-      try {
-        this.ws?.close();
-      } catch {}
-    };
-
-    this.ws.onmessage = (ev) => {
-      const txt = String(ev.data || "");
-
-      let msg: WsMsg;
-      try {
-        msg = JSON.parse(txt) as WsMsg;
-      } catch {
-        msg = { type: "raw", data: txt };
-      }
-
-      for (const h of this.handlers) {
         try {
-          h(msg);
+          const msg = JSON.parse(String(ev.data || "{}")) as WsMessage;
+          this.emitMessage(msg);
         } catch {
-          // ignore handler errors
+          // ignore invalid JSON
         }
-      }
-    };
+      };
+
+      ws.onclose = () => {
+        if (this.ws === ws) {
+          this.ws = null;
+        }
+        this.clearPingTimer();
+        this.emitStatus(false);
+        this.scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        this.emitStatus(false);
+      };
+    } catch {
+      this.clearPingTimer();
+      this.emitStatus(false);
+      this.scheduleReconnect();
+    }
   }
 
   disconnect() {
-    this.shouldStop = true;
-    this.connected = false;
-    this.emitStatus(false);
+    this.manuallyClosed = true;
+    this.clearReconnectTimer();
+    this.clearPingTimer();
 
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // ignore
+      }
+      this.ws = null;
     }
 
-    try {
-      this.ws?.close();
-    } catch {}
-    this.ws = null;
+    this.emitStatus(false);
   }
 
-  private scheduleReconnect() {
-    if (this.reconnectTimer) return;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (!this.shouldStop) this.connect();
-    }, 3000);
+  isConnected() {
+    return this.connected;
   }
 
-  onMessage(handler: Handler) {
-    this.handlers.add(handler);
-
-    // ✅ IMPORTANT: cleanup returns void
+  onMessage(handler: MessageHandler) {
+    this.messageHandlers.add(handler);
     return () => {
-      this.handlers.delete(handler);
+      this.messageHandlers.delete(handler);
     };
   }
 
-  send(payload: WsMsg): boolean {
+  onStatusChange(handler: StatusHandler) {
+    this.statusHandlers.add(handler);
+    return () => {
+      this.statusHandlers.delete(handler);
+    };
+  }
+
+  onEvent(eventName: string, handler: MessageHandler) {
+    const wrapped: MessageHandler = (msg) => {
+      if (msg?.type === "event" && msg?.event === eventName) {
+        handler(msg);
+      }
+    };
+
+    this.messageHandlers.add(wrapped);
+    return () => {
+      this.messageHandlers.delete(wrapped);
+    };
+  }
+
+  sendRaw(payload: Record<string, any>) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+
     try {
       this.ws.send(JSON.stringify(payload));
       return true;
@@ -161,37 +222,13 @@ class WsService {
     }
   }
 
-  // ✅ Dedupe sendSms within 1200ms (same device+to+message+sim)
-  private shouldDropDuplicateSendSms(name: string, payload: Record<string, any>): boolean {
-    if (name !== "sendSms") return false;
-
-    const p = payload || {};
-    const to = String(p.address ?? p.to ?? "").trim();
-    const msg = String(p.message ?? p.body ?? "").trim();
-    const sim = String(p.sim ?? "").trim();
-    const uid = String(p.uniqueid ?? p.deviceId ?? "").trim();
-
-    if (!to || !msg || !uid) return false;
-
-    const key = `${uid}::${sim}::${to}::${msg}`;
-    const now = Date.now();
-
-    // 1.2 seconds window
-    if (this.lastSmsKey === key && now - this.lastSmsAt < 1200) {
-      return true;
-    }
-
-    this.lastSmsKey = key;
-    this.lastSmsAt = now;
-    return false;
-  }
-
-  sendCmd(name: string, payload: Record<string, any> = {}): boolean {
-    if (this.shouldDropDuplicateSendSms(name, payload)) {
-      // treat as "sent" to avoid UI retry loops
-      return true;
-    }
-    return this.send({ type: "cmd", name, payload });
+  sendCmd(name: string, payload: Record<string, any> = {}) {
+    return this.sendRaw({
+      type: "cmd",
+      name,
+      payload,
+      timestamp: Date.now(),
+    });
   }
 }
 
