@@ -27,7 +27,7 @@ function BrandLogo({ size = 40 }: { size?: number }) {
       alt="ZeroTrace"
       width={size}
       height={size}
-      className="rounded-lg object-cover shrink-0 border"
+      className="shrink-0 rounded-xl border border-slate-200 bg-white object-cover"
       draggable={false}
     />
   );
@@ -39,8 +39,8 @@ export default function Sidebar() {
 
   useEffect(() => {
     const toggle = () => setOpenMobile((v) => !v);
-    window.addEventListener("zerotrace:toggle-sidebar", toggle as any);
-    return () => window.removeEventListener("zerotrace:toggle-sidebar", toggle as any);
+    window.addEventListener("zerotrace:toggle-sidebar", toggle as EventListener);
+    return () => window.removeEventListener("zerotrace:toggle-sidebar", toggle as EventListener);
   }, []);
 
   useEffect(() => {
@@ -51,28 +51,30 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-64 flex-col bg-white border-r min-h-screen">
-        <div className="p-4 border-b">
+      <aside className="hidden min-h-screen w-64 shrink-0 border-r border-slate-200 bg-white/92 md:flex md:flex-col">
+        <div className="border-b border-slate-200 p-4">
           <div className="flex items-center gap-3">
             <BrandLogo size={40} />
-            <div className="leading-tight">
-              <div className="font-semibold">ZeroTrace</div>
-              <div className="text-xs text-gray-400">Admin Panel</div>
+            <div className="min-w-0 leading-tight">
+              <div className="truncate font-semibold text-slate-900">ZeroTrace</div>
+              <div className="text-xs text-slate-400">Admin Panel</div>
             </div>
           </div>
         </div>
 
-        <nav className="p-2 flex-1 space-y-1">
+        <nav className="flex-1 space-y-1 p-2">
           {nav.map((it) => {
             const active = isActive(loc.pathname, it.path);
             return (
               <Link
                 key={it.path}
                 to={it.path}
-                className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm ${
-                  active ? "bg-[var(--brand)]/10 text-[var(--brand)] font-medium" : "text-gray-700 hover:bg-gray-50"
-                }`}
+                className={[
+                  "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
+                  active
+                    ? "border border-slate-900 bg-slate-900 font-semibold text-white"
+                    : "border border-transparent text-slate-700 hover:bg-slate-50",
+                ].join(" ")}
               >
                 <span className="w-5 text-center">{it.icon}</span>
                 <span className="truncate">{it.label}</span>
@@ -81,33 +83,52 @@ export default function Sidebar() {
           })}
         </nav>
 
-        <div className="p-3 border-t text-xs text-gray-400">WS events + REST APIs synced</div>
+        <div className="border-t border-slate-200 p-3 text-xs text-slate-400">
+          WS events + REST APIs synced
+        </div>
       </aside>
 
-      {/* Mobile overlay sidebar (optional) */}
       {openMobile && (
-        <div className="md:hidden fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpenMobile(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-72 bg-white shadow-lg">
-            <div className="p-4 border-b flex items-center justify-between">
-              <div className="font-semibold">Menu</div>
-              <button className="px-2 py-1 border rounded" onClick={() => setOpenMobile(false)} type="button">
+        <div className="fixed inset-0 z-[1200] md:hidden">
+          <button
+            className="absolute inset-0 bg-black/35"
+            onClick={() => setOpenMobile(false)}
+            type="button"
+            aria-label="Close menu overlay"
+          />
+
+          <div className="absolute bottom-0 left-0 top-0 w-[84vw] max-w-[320px] border-r border-slate-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
+            <div className="flex items-center justify-between border-b border-slate-200 p-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <BrandLogo size={36} />
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-slate-900">ZeroTrace</div>
+                  <div className="text-xs text-slate-400">Menu</div>
+                </div>
+              </div>
+
+              <button
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                onClick={() => setOpenMobile(false)}
+                type="button"
+              >
                 ✕
               </button>
             </div>
 
-            <nav className="p-2 space-y-1">
+            <nav className="space-y-1 p-2">
               {nav.map((it) => {
                 const active = isActive(loc.pathname, it.path);
                 return (
                   <Link
                     key={it.path}
                     to={it.path}
-                    className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm ${
+                    className={[
+                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition",
                       active
-                        ? "bg-[var(--brand)]/10 text-[var(--brand)] font-medium"
-                        : "text-gray-700 hover:bg-gray-50"
-                    }`}
+                        ? "border border-slate-900 bg-slate-900 font-semibold text-white"
+                        : "border border-transparent text-slate-700 hover:bg-slate-50",
+                    ].join(" ")}
                   >
                     <span className="w-5 text-center">{it.icon}</span>
                     <span className="truncate">{it.label}</span>
