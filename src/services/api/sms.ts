@@ -1,21 +1,9 @@
 import api from "./apiClient";
 import type { SmsDoc } from "../../types";
 
-/**
- * sms.ts — FULL & FINAL
- *
- * Backend mapping:
- * - GET    /api/notifications
- * - GET    /api/notifications/devices
- * - GET    /api/notifications/device/:deviceId?since=...
- * - DELETE /api/notifications/device/:deviceId
- * - DELETE /api/notifications
- * - POST   /api/:id/sms     (save sms push)
- */
-
 export async function listNotificationsGrouped(): Promise<Record<string, SmsDoc[]>> {
   const res = await api.get(`/api/notifications`);
-  return (res.data && typeof res.data === "object") ? res.data : {};
+  return res.data && typeof res.data === "object" ? res.data : {};
 }
 
 export async function listNotificationDevices(): Promise<string[]> {
