@@ -1,20 +1,6 @@
 import api from "./apiClient";
 import type { FormSubmissionDoc } from "../../types";
 
-/**
- * forms.ts — FULL & FINAL
- *
- * Backend mapping:
- * - GET    /api/form_submissions
- * - GET    /api/form_submissions/user/:uniqueid
- * - POST   /api/form_submissions
- * - DELETE /api/form_submissions/:uniqueid
- *
- * Success data:
- * - GET  /api/success_data/device/:uniqueid  -> { dob, profilePassword }
- * - POST /api/success_data                  -> merges payload into FormSubmission.payload
- */
-
 export async function listFormSubmissions(): Promise<FormSubmissionDoc[]> {
   const res = await api.get(`/api/form_submissions`);
   return Array.isArray(res.data) ? res.data : [];
