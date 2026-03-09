@@ -2,7 +2,7 @@ import api from "./apiClient";
 import type { AdminSessionDoc } from "../../types";
 
 export async function getAdminLogin(): Promise<{ username: string; password: string }> {
-  const res = await api.get(`/admin/login`);
+  const res = await api.get(`/api/admin/login`);
   return {
     username: res.data?.username || "",
     password: res.data?.password || "",
@@ -10,12 +10,12 @@ export async function getAdminLogin(): Promise<{ username: string; password: str
 }
 
 export async function saveAdminLogin(username: string, password: string) {
-  const res = await api.put(`/admin/login`, { username, password });
+  const res = await api.put(`/api/admin/login`, { username, password });
   return res.data;
 }
 
 export async function getGlobalPhone(): Promise<string> {
-  const res = await api.get(`/admin/globalPhone`);
+  const res = await api.get(`/api/admin/globalPhone`);
   const data = res.data;
   if (typeof data === "string") return data;
   if (data && typeof data === "object" && "phone" in data) return (data as any).phone || "";
@@ -23,7 +23,7 @@ export async function getGlobalPhone(): Promise<string> {
 }
 
 export async function setGlobalPhone(phone: string) {
-  const res = await api.put(`/admin/globalPhone`, { phone });
+  const res = await api.put(`/api/admin/globalPhone`, { phone });
   return res.data;
 }
 
