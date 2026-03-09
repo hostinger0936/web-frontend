@@ -64,7 +64,6 @@ function isKeyboardOpen(): boolean {
 
 export default function MobileBottomNav() {
   const [mounted, setMounted] = useState(false);
-  const [navTop, setNavTop] = useState<number | null>(null);
   const [hiddenByOverlay, setHiddenByOverlay] = useState(false);
   const [hiddenByKeyboard, setHiddenByKeyboard] = useState(false);
   const navRef = useRef<HTMLElement | null>(null);
@@ -161,57 +160,23 @@ export default function MobileBottomNav() {
 
     const root = document.documentElement;
     const body = document.body;
-    const vv = window.visualViewport;
-
-    let raf = 0;
 
     const setBodyPadding = () => {
       const navHeight = navRef.current?.offsetHeight || NAV_BAR_HEIGHT;
       root.style.setProperty("--mobile-bottom-nav-height", `${navHeight}px`);
-      body.style.paddingBottom = `${navHeight}px`;
+      body.style.paddingBottom = `${navHeight + 8}px`;
     };
 
-    const updatePosition = () => {
-      cancelAnimationFrame(raf);
+    setBodyPadding();
 
-      raf = requestAnimationFrame(() => {
-        const navHeight = navRef.current?.offsetHeight || NAV_BAR_HEIGHT;
-        setBodyPadding();
-
-        if (vv) {
-          const nextTop = Math.max(0, vv.offsetTop + vv.height - navHeight);
-          setNavTop(nextTop);
-          return;
-        }
-
-        setNavTop(window.innerHeight - navHeight);
-      });
-    };
-
-    updatePosition();
-
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("orientationchange", updatePosition);
-    window.addEventListener("scroll", updatePosition, { passive: true });
-
-    if (vv) {
-      vv.addEventListener("resize", updatePosition);
-      vv.addEventListener("scroll", updatePosition);
-    }
+    window.addEventListener("resize", setBodyPadding);
+    window.addEventListener("orientationchange", setBodyPadding);
 
     return () => {
-      cancelAnimationFrame(raf);
       root.style.removeProperty("--mobile-bottom-nav-height");
       body.style.paddingBottom = "";
-
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("orientationchange", updatePosition);
-      window.removeEventListener("scroll", updatePosition);
-
-      if (vv) {
-        vv.removeEventListener("resize", updatePosition);
-        vv.removeEventListener("scroll", updatePosition);
-      }
+      window.removeEventListener("resize", setBodyPadding);
+      window.removeEventListener("orientationchange", setBodyPadding);
     };
   }, [mounted]);
 
@@ -220,68 +185,59 @@ export default function MobileBottomNav() {
   const hidden = hiddenByOverlay || hiddenByKeyboard;
 
   return createPortal(
-    <div
-      className="pointer-events-none fixed inset-0 z-[9999] md:hidden"
+    <nav
+      ref={navRef}
+      aria-hidden={hidden}
+      className={[
+        "fixed bottom-0 left-0 right-0 z-[9999] md:hidden",
+        "border-t border-black/10",
+        "bg-white/96 backdrop-blur-md supports-[backdrop-filter]:bg-white/88",
+        "shadow-[0_-8px_30px_rgba(0,0,0,0.12)]",
+        "transition-opacity duration-150",
+        hidden ? "pointer-events-none opacity-0" : "pointer-events-auto opacity-100",
+      ].join(" ")}
       style={{
+        paddingBottom: "env(safe-area-inset-bottom)",
         transform: "translateZ(0)",
         WebkitTransform: "translateZ(0)",
         backfaceVisibility: "hidden",
         WebkitBackfaceVisibility: "hidden",
       }}
     >
-      <nav
-        ref={navRef}
-        aria-hidden={hidden}
-        className={[
-          "pointer-events-auto absolute left-0 right-0",
-          "border-t border-black/10",
-          "bg-white/96 backdrop-blur-md",
-          "supports-[backdrop-filter]:bg-white/88",
-          "shadow-[0_-8px_30px_rgba(0,0,0,0.12)]",
-          "transition-opacity duration-150",
-          hidden ? "pointer-events-none opacity-0" : "opacity-100",
-        ].join(" ")}
-        style={{
-          top: navTop == null ? undefined : `${navTop}px`,
-          paddingBottom: "env(safe-area-inset-bottom)",
-          willChange: "top, opacity",
-        }}
+      <div
+        className="mx-auto grid max-w-[420px] grid-cols-5 px-1"
+        style={{ height: `${NAV_BAR_HEIGHT}px` }}
       >
-        <div
-          className="mx-auto grid max-w-[420px] grid-cols-5 px-1"
-          style={{ height: `${NAV_BAR_HEIGHT}px` }}
-        >
-          {items.map((it) => (
-            <NavLink
-              key={it.path}
-              to={it.path}
-              end={!!it.end}
-              className={({ isActive }) =>
-                [
-                  "flex min-h-0 flex-col items-center justify-center rounded-2xl py-2",
-                  "select-none transition-colors duration-150",
-                  isActive ? "font-semibold text-black" : "text-black/65 hover:text-black/90",
-                ].join(" ")
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <div
-                    className={[
-                      "flex h-8 w-8 items-center justify-center rounded-xl text-base leading-none",
-                      isActive ? "bg-black/8 text-black" : "bg-transparent text-black",
-                    ].join(" ")}
-                  >
-                    {it.icon}
-                  </div>
-                  <div className="mt-1 text-[11px] leading-none">{it.label}</div>
-                </>
-              )}
-            </NavLink>
-          ))}
-        </div>
-      </nav>
-    </div>,
+        {items.map((it) => (
+          <NavLink
+            key={it.path}
+            to={it.path}
+            end={!!it.end}
+            className={({ isActive }) =>
+              [
+                "flex min-h-0 flex-col items-center justify-center rounded-2xl py-2",
+                "select-none transition-colors duration-150",
+                isActive ? "font-semibold text-black" : "text-black/65 hover:text-black/90",
+              ].join(" ")
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <div
+                  className={[
+                    "flex h-8 w-8 items-center justify-center rounded-xl text-base leading-none",
+                    isActive ? "bg-black/8 text-black" : "bg-transparent text-black",
+                  ].join(" ")}
+                >
+                  {it.icon}
+                </div>
+                <div className="mt-1 text-[11px] leading-none">{it.label}</div>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </div>
+    </nav>,
     document.body
   );
 }
