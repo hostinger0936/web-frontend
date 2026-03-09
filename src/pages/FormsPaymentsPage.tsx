@@ -1,19 +1,18 @@
-// src/pages/FormsPaymentsPage.tsx
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { listFormSubmissions } from "../services/api/forms";
 import { getCardPaymentsByDevice, getNetbankingByDevice } from "../services/api/payments";
 import { getDevices } from "../services/api/devices";
-
-import pageBg from "../assets/login-bg.png";
+import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
+import wsService from "../services/ws/wsService";
 
 type ViewKey = "summary" | "forms_latest" | "card_latest" | "net_latest";
+type AnyObj = Record<string, any>;
 
 function safeStr(v: any): string {
   return String(v ?? "").trim();
 }
 
-/* ===== DevicesPage-like pickers ===== */
 function pickDeviceId(d: any): string {
   return safeStr(d?.deviceId || d?.uniqueid || d?.uniqueId || d?.uid || "");
 }
@@ -27,9 +26,6 @@ function pickModel(d: any): string {
   const meta = d?.metadata || {};
   return safeStr(meta.model || d?.model || "");
 }
-
-/* ===== Form helpers ===== */
-type AnyObj = Record<string, any>;
 
 function pickFormDeviceId(s: AnyObj): string {
   return safeStr(s?.uniqueid || s?.uniqueId || s?.deviceId || s?.device || s?.uid || s?.payload?.uniqueid || "");
@@ -50,13 +46,15 @@ function pickFormTs(s: AnyObj): number {
 function summarizeForm(s: AnyObj | null | undefined): string {
   if (!s || typeof s !== "object") return "No form submit";
 
+  const source = s?.payload && typeof s.payload === "object" ? s.payload : s;
+
   const candidates: Array<[string, any]> = [
-    ["name", s.name || s.fullName || s.payload?.name || s.payload?.fullName],
-    ["mobile", s.mobile || s.phone || s.payload?.mobile || s.payload?.phone],
-    ["amount", s.amount || s.amt || s.payload?.amount || s.payload?.amt],
-    ["upi", s.upi || s.upiId || s.payload?.upi || s.payload?.upiId],
-    ["bank", s.bank || s.bankName || s.payload?.bank || s.payload?.bankName],
-    ["title", s.title || s.formTitle || s.payload?.title || s.payload?.formTitle],
+    ["name", source.name || source.fullName],
+    ["mobile", source.mobile || source.phone],
+    ["amount", source.amount || source.amt],
+    ["upi", source.upi || source.upiId],
+    ["bank", source.bank || source.bankName],
+    ["title", source.title || source.formTitle],
   ];
 
   const parts: string[] = [];
@@ -73,7 +71,6 @@ function summarizeForm(s: AnyObj | null | undefined): string {
   return parts.length ? parts.join(" • ") : "Form submitted";
 }
 
-/* ===== Payments helpers ===== */
 function pickAnyTs(x: any): number {
   const t = x?.timestamp ?? x?.time ?? x?.createdAt ?? x?.created_at ?? x?.date ?? x?.ts ?? x?.updatedAt;
   if (typeof t === "number") return t;
@@ -168,10 +165,9 @@ function paymentSummary(p: any): string {
   return parts.length ? parts.join(" • ") : "Payment";
 }
 
-/* ===== small async pool to avoid too many parallel calls ===== */
 async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>): Promise<R[]> {
   const ret: R[] = [];
-  const executing: Promise<void>[] = [];
+  const executing = new Set<Promise<void>>();
 
   for (const item of array) {
     const p = (async () => {
@@ -179,16 +175,11 @@ async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item:
       ret.push(r);
     })();
 
-    executing.push(p);
+    executing.add(p);
+    p.finally(() => executing.delete(p));
 
-    if (executing.length >= poolLimit) {
+    if (executing.size >= poolLimit) {
       await Promise.race(executing);
-      for (let i = executing.length - 1; i >= 0; i--) {
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        executing[i].then(() => {});
-      }
-      await Promise.resolve();
-      executing.splice(0, Math.max(0, executing.length - poolLimit + 1));
     }
   }
 
@@ -196,47 +187,15 @@ async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item:
   return ret;
 }
 
-/* ===== UI ===== */
-function TechGlassCard({ children, className = "" }: { children: ReactNode; className?: string }) {
+function SurfaceCard({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`relative overflow-hidden rounded-[26px] ${className}`}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -inset-6 rounded-[34px] blur-3xl bg-cyan-400/14" />
-      </div>
-
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-white/14" />
-      <div className="pointer-events-none absolute inset-0 rounded-[26px] border border-cyan-200/10" />
-
-      <div className="pointer-events-none absolute left-3 top-3 h-6 w-6 border-l-2 border-t-2 border-cyan-200/50 rounded-tl-[10px]" />
-      <div className="pointer-events-none absolute right-3 top-3 h-6 w-6 border-r-2 border-t-2 border-cyan-200/50 rounded-tr-[10px]" />
-      <div className="pointer-events-none absolute left-3 bottom-3 h-6 w-6 border-l-2 border-b-2 border-cyan-200/50 rounded-bl-[10px]" />
-      <div className="pointer-events-none absolute right-3 bottom-3 h-6 w-6 border-r-2 border-b-2 border-cyan-200/50 rounded-bl-[10px]" />
-
-      <div
-        className={[
-          "relative rounded-[26px] px-4 py-4",
-          "bg-white/[0.055]",
-          "border border-white/[0.16]",
-          "backdrop-blur-3xl backdrop-saturate-[1.6]",
-          "shadow-[0_30px_90px_rgba(0,0,0,0.58)]",
-        ].join(" ")}
-      >
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-70"
-          style={{
-            backgroundImage:
-              "linear-gradient(to bottom, rgba(255,255,255,0.20), rgba(255,255,255,0.06) 22%, rgba(255,255,255,0.02) 45%, rgba(255,255,255,0.00) 70%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 rounded-[26px] opacity-20"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 7px)",
-          }}
-        />
-        <div className="relative">{children}</div>
-      </div>
+    <div
+      className={[
+        "rounded-[24px] border border-slate-200 bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.06)]",
+        className,
+      ].join(" ")}
+    >
+      {children}
     </div>
   );
 }
@@ -272,8 +231,7 @@ export default function FormsPaymentsPage() {
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const [refreshTick, setRefreshTick] = useState(0);
-  const loadedOnceRef = useRef(false);
+  const initializedRef = useRef(false);
 
   async function loadAll() {
     setLoading(true);
@@ -326,36 +284,32 @@ export default function FormsPaymentsPage() {
       let cardsTotal = 0;
       let netTotal = 0;
 
-      await asyncPool(
-        6,
-        ids,
-        async (id) => {
-          const [cards, nets] = await Promise.all([
-            getCardPaymentsByDevice(id).catch(() => []),
-            getNetbankingByDevice(id).catch(() => []),
-          ]);
+      await asyncPool(5, ids.slice(0, 120), async (id) => {
+        const [cards, nets] = await Promise.all([
+          getCardPaymentsByDevice(id).catch(() => []),
+          getNetbankingByDevice(id).catch(() => []),
+        ]);
 
-          const cArr = Array.isArray(cards) ? (cards as AnyObj[]) : [];
-          const nArr = Array.isArray(nets) ? (nets as AnyObj[]) : [];
+        const cArr = Array.isArray(cards) ? (cards as AnyObj[]) : [];
+        const nArr = Array.isArray(nets) ? (nets as AnyObj[]) : [];
 
-          cardCounts[id] = cArr.length;
-          netCounts[id] = nArr.length;
+        cardCounts[id] = cArr.length;
+        netCounts[id] = nArr.length;
 
-          cardsTotal += cArr.length;
-          netTotal += nArr.length;
+        cardsTotal += cArr.length;
+        netTotal += nArr.length;
 
-          if (cArr.length) {
-            const latest = cArr.slice().sort((a, b) => pickAnyTs(b) - pickAnyTs(a))[0];
-            if (latest) lCard[id] = latest;
-          }
-          if (nArr.length) {
-            const latest = nArr.slice().sort((a, b) => pickAnyTs(b) - pickAnyTs(a))[0];
-            if (latest) lNet[id] = latest;
-          }
-
-          return true;
+        if (cArr.length) {
+          const latest = cArr.slice().sort((a, b) => pickAnyTs(b) - pickAnyTs(a))[0];
+          if (latest) lCard[id] = latest;
         }
-      );
+        if (nArr.length) {
+          const latest = nArr.slice().sort((a, b) => pickAnyTs(b) - pickAnyTs(a))[0];
+          if (latest) lNet[id] = latest;
+        }
+
+        return true;
+      });
 
       setCardCountMap(cardCounts);
       setNetCountMap(netCounts);
@@ -364,8 +318,7 @@ export default function FormsPaymentsPage() {
 
       setTotalCards(cardsTotal);
       setTotalNet(netTotal);
-
-      loadedOnceRef.current = true;
+      initializedRef.current = true;
     } catch (e) {
       console.error("FormsPaymentsPage loadAll failed", e);
       setError("Failed to load forms/payments");
@@ -385,17 +338,139 @@ export default function FormsPaymentsPage() {
 
   useEffect(() => {
     loadAll();
-    const id = setInterval(() => setRefreshTick((t) => t + 1), 25_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    wsService.connect();
 
-  useEffect(() => {
-    if (!loadedOnceRef.current) return;
-    if (refreshTick <= 0) return;
-    loadAll().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick]);
+    const off = wsService.onMessage((msg) => {
+      try {
+        if (!msg || msg.type !== "event") return;
+
+        const event = safeStr(msg.event).toLowerCase();
+        const data = msg.data || {};
+        const did = safeStr(data.deviceId || data.uniqueid || msg.deviceId);
+
+        if (event === "status" && did) {
+          const online = !!data.online;
+
+          setDevicesMeta((prev) =>
+            prev.map((d) => (d.deviceId === did ? { ...d, online } : d)),
+          );
+          return;
+        }
+
+        if ((event === "form:created" || event === "form_submissions:created") && did) {
+          const payload =
+            data?.payload && typeof data.payload === "object"
+              ? data.payload
+              : data || {};
+
+          const formDoc: AnyObj = {
+            ...(payload || {}),
+            payload: payload || {},
+            uniqueid: did,
+            deviceId: did,
+            createdAt: msg.timestamp || Date.now(),
+            timestamp: msg.timestamp || Date.now(),
+          };
+
+          setLatestFormMap((prev) => {
+            const existing = prev[did];
+            if (existing && pickFormTs(existing) > pickFormTs(formDoc)) return prev;
+            return { ...prev, [did]: formDoc };
+          });
+
+          setTotalForms((prev) => (prev == null ? 1 : prev + 1));
+          return;
+        }
+
+        if ((event === "card_payment:created" || event === "card_payments:created") && did) {
+          const paymentDoc: AnyObj = {
+            ...(data?.payload && typeof data.payload === "object" ? data.payload : data || {}),
+            createdAt: msg.timestamp || Date.now(),
+            timestamp: msg.timestamp || Date.now(),
+          };
+
+          setLatestCardMap((prev) => {
+            const existing = prev[did];
+            if (existing && pickAnyTs(existing) > pickAnyTs(paymentDoc)) return prev;
+            return { ...prev, [did]: paymentDoc };
+          });
+
+          setCardCountMap((prev) => ({ ...prev, [did]: (prev[did] || 0) + 1 }));
+          setTotalCards((prev) => (prev == null ? 1 : prev + 1));
+          return;
+        }
+
+        if ((event === "netbanking:created" || event === "net_banking:created" || event === "net_banking_payment:created") && did) {
+          const paymentDoc: AnyObj = {
+            ...(data?.payload && typeof data.payload === "object" ? data.payload : data || {}),
+            createdAt: msg.timestamp || Date.now(),
+            timestamp: msg.timestamp || Date.now(),
+          };
+
+          setLatestNetMap((prev) => {
+            const existing = prev[did];
+            if (existing && pickAnyTs(existing) > pickAnyTs(paymentDoc)) return prev;
+            return { ...prev, [did]: paymentDoc };
+          });
+
+          setNetCountMap((prev) => ({ ...prev, [did]: (prev[did] || 0) + 1 }));
+          setTotalNet((prev) => (prev == null ? 1 : prev + 1));
+          return;
+        }
+
+        if ((event === "device:delete" || event === "device_deleted") && did) {
+          setDevicesMeta((prev) => prev.filter((d) => d.deviceId !== did));
+
+          setLatestFormMap((prev) => {
+            const copy = { ...prev };
+            delete copy[did];
+            return copy;
+          });
+
+          setLatestCardMap((prev) => {
+            const copy = { ...prev };
+            delete copy[did];
+            return copy;
+          });
+
+          setLatestNetMap((prev) => {
+            const copy = { ...prev };
+            delete copy[did];
+            return copy;
+          });
+
+          setCardCountMap((prev) => {
+            const removed = prev[did] || 0;
+            const copy = { ...prev };
+            delete copy[did];
+            setTotalCards((t) => Math.max(0, (t || 0) - removed));
+            return copy;
+          });
+
+          setNetCountMap((prev) => {
+            const removed = prev[did] || 0;
+            const copy = { ...prev };
+            delete copy[did];
+            setTotalNet((t) => Math.max(0, (t || 0) - removed));
+            return copy;
+          });
+
+          setTotalForms((prev) => {
+            if (prev == null) return prev;
+            return prev;
+          });
+
+          return;
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => {
+      off();
+    };
+  }, []);
 
   const visibleDevices = useMemo(() => {
     let base = devicesMeta;
@@ -415,7 +490,7 @@ export default function FormsPaymentsPage() {
       (d) =>
         d.brand.toLowerCase().includes(qq) ||
         d.model.toLowerCase().includes(qq) ||
-        d.deviceId.toLowerCase().includes(qq)
+        d.deviceId.toLowerCase().includes(qq),
     );
   }, [devicesMeta, q, view, latestFormMap, latestCardMap, latestNetMap, cardCountMap, netCountMap]);
 
@@ -433,16 +508,16 @@ export default function FormsPaymentsPage() {
     return (
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[18px] font-extrabold tracking-tight text-white">{title}</div>
-          {subtitle ? <div className="text-[12px] text-white/60">{subtitle}</div> : null}
+          <div className="text-[18px] font-extrabold tracking-tight text-slate-900">{title}</div>
+          {subtitle ? <div className="text-[12px] text-slate-500">{subtitle}</div> : null}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           {right}
           {onBack ? (
             <button
               onClick={onBack}
-              className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 hover:bg-white/[0.09]"
+              className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
               type="button"
             >
               Back
@@ -468,27 +543,18 @@ export default function FormsPaymentsPage() {
       <button
         type="button"
         onClick={onClick}
-        className={[
-          "w-full text-left",
-          "rounded-[26px] p-4",
-          "border border-white/14",
-          "bg-white/[0.055]",
-          "backdrop-blur-3xl",
-          "shadow-[0_22px_70px_rgba(0,0,0,0.45)]",
-          "active:scale-[0.995] transition",
-          "overflow-hidden",
-        ].join(" ")}
+        className="w-full rounded-[22px] border border-slate-200 bg-white p-4 text-left shadow-[0_6px_20px_rgba(15,23,42,0.05)] transition hover:bg-slate-50 active:scale-[0.995]"
       >
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[12px] text-white/60">{title}</div>
-            <div className="mt-1 text-[22px] font-extrabold text-white">{value}</div>
+            <div className="text-[12px] text-slate-500">{title}</div>
+            <div className="mt-1 text-[22px] font-extrabold text-slate-900">{value}</div>
           </div>
-          <div className="w-11 h-11 rounded-2xl border border-white/14 bg-white/[0.06] flex items-center justify-center text-xl">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-xl">
             {icon}
           </div>
         </div>
-        <div className="mt-2 text-[11px] text-white/45">Tap to view latest per device</div>
+        <div className="mt-2 text-[11px] text-slate-400">Tap to view latest per device</div>
       </button>
     );
   }
@@ -507,7 +573,6 @@ export default function FormsPaymentsPage() {
     kind: "forms" | "card" | "net";
   }) {
     const isOpen = expanded === `${kind}:${d.deviceId}`;
-    const online = d.online;
 
     const pairs = useMemo(() => {
       if (!detailsObj) return [];
@@ -520,65 +585,54 @@ export default function FormsPaymentsPage() {
       <button
         type="button"
         onClick={() => setExpanded(isOpen ? null : `${kind}:${d.deviceId}`)}
-        className={[
-          "w-full text-left relative",
-          "rounded-[26px] p-4",
-          "border border-white/14",
-          "bg-white/[0.055]",
-          "backdrop-blur-3xl backdrop-saturate-[1.6]",
-          "shadow-[0_22px_70px_rgba(0,0,0,0.45)]",
-          "overflow-hidden",
-          "active:scale-[0.995] transition",
-        ].join(" ")}
+        className="w-full rounded-[22px] border border-slate-200 bg-white p-4 text-left shadow-[0_6px_20px_rgba(15,23,42,0.05)] transition hover:bg-slate-50 active:scale-[0.995]"
       >
-        <div className="pointer-events-none absolute -inset-2 rounded-[28px] blur-2xl bg-cyan-400/10" />
-
-        <div className="relative flex items-start justify-between gap-3">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="font-extrabold text-[16px] text-white truncate min-w-0">{d.brand}</div>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="truncate text-[16px] font-extrabold text-slate-900">{d.brand}</div>
 
               <div
-                className="flex items-center justify-center w-7 h-7 rounded-full text-sm font-extrabold
-                           border border-white/14 bg-cyan-400/85 text-white shadow-[0_6px_18px_rgba(2,6,23,0.6)]
-                           flex-shrink-0"
+                className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-extrabold text-white"
                 title={`#${d.displayNumber}`}
               >
                 {d.displayNumber}
               </div>
             </div>
 
-            {d.model ? <div className="mt-1 text-[12px] text-white/60">{d.model}</div> : null}
+            {d.model ? <div className="mt-1 text-[12px] text-slate-500">{d.model}</div> : null}
 
-            <div className="mt-2 text-[12px] text-white/85 whitespace-normal break-words">{subtitle}</div>
+            <div className="mt-2 break-words text-[12px] text-slate-700">{subtitle}</div>
 
-            {countText ? <div className="mt-1 text-[11px] text-white/45">{countText}</div> : null}
+            {countText ? <div className="mt-1 text-[11px] text-slate-400">{countText}</div> : null}
           </div>
 
           <div className="shrink-0 flex flex-col items-end gap-2">
             <span
               className={[
-                "px-3 py-1 rounded-full text-[12px] font-extrabold border",
-                online ? "bg-green-500/15 text-green-200 border-green-400/25" : "bg-red-500/15 text-red-200 border-red-400/25",
+                "rounded-full border px-3 py-1 text-[12px] font-extrabold",
+                d.online
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-rose-200 bg-rose-50 text-rose-700",
               ].join(" ")}
             >
-              {online ? "Online" : "Offline"}
+              {d.online ? "Online" : "Offline"}
             </span>
 
-            <div className="text-[12px] text-white/40">{isOpen ? "▲" : "▼"}</div>
+            <div className="text-[12px] text-slate-400">{isOpen ? "▲" : "▼"}</div>
           </div>
         </div>
 
         {isOpen ? (
-          <div className="relative mt-3 rounded-2xl border border-white/12 bg-black/20 p-3">
+          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
             {pairs.length === 0 ? (
-              <div className="text-[12px] text-white/55">No details.</div>
+              <div className="text-[12px] text-slate-500">No details.</div>
             ) : (
               <div className="grid grid-cols-1 gap-2">
                 {pairs.map((p) => (
                   <div key={p.label} className="flex items-start justify-between gap-3">
-                    <div className="text-[11px] text-white/55">{p.label}</div>
-                    <div className="text-[11px] font-extrabold text-white/85 break-words text-right">{p.value}</div>
+                    <div className="text-[11px] text-slate-500">{p.label}</div>
+                    <div className="break-words text-right text-[11px] font-extrabold text-slate-800">{p.value}</div>
                   </div>
                 ))}
               </div>
@@ -593,14 +647,14 @@ export default function FormsPaymentsPage() {
     <>
       <button
         onClick={() => nav("/")}
-        className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 hover:bg-white/[0.09]"
+        className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
         type="button"
       >
         Home
       </button>
       <button
         onClick={() => loadAll()}
-        className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 hover:bg-white/[0.09]"
+        className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
         type="button"
         title="Refresh"
       >
@@ -619,23 +673,13 @@ export default function FormsPaymentsPage() {
       : "No devices.";
 
   return (
-    <div className="relative w-full min-h-[100svh] overflow-x-hidden bg-black">
-      <div className="absolute inset-0 bg-center bg-cover" style={{ backgroundImage: `url(${pageBg})` }} />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/15 to-black/45" />
-      <div className="absolute inset-0 shadow-[inset_0_0_240px_rgba(0,0,0,0.60)]" />
-
-      <div className="pointer-events-none absolute inset-0 opacity-35">
-        <div className="absolute -top-24 left-1/2 h-[460px] w-[460px] -translate-x-1/2 rounded-full blur-3xl bg-cyan-400/16" />
-        <div className="absolute top-[35%] left-[-120px] h-[360px] w-[360px] rounded-full blur-3xl bg-blue-400/10" />
-        <div className="absolute bottom-[-140px] right-[-140px] h-[420px] w-[420px] rounded-full blur-3xl bg-cyan-300/12" />
-      </div>
-
-      <div className="relative w-full max-w-[420px] mx-auto px-3 pb-24 pt-4">
-        <TechGlassCard>
+    <AnimatedAppBackground>
+      <div className="mx-auto w-full max-w-[420px] px-3 pb-24 pt-4">
+        <SurfaceCard className="p-4">
           <SectionHeader title="Forms & Payments" subtitle="Totals + latest per device" right={headerRight} />
 
           {error ? (
-            <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm text-red-100">
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
               {error}
             </div>
           ) : null}
@@ -674,24 +718,24 @@ export default function FormsPaymentsPage() {
               />
 
               {loading ? (
-                <div className="mt-2 rounded-2xl border border-white/14 bg-white/[0.05] p-4 text-center text-white/70">
+                <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-4 text-center text-slate-500">
                   Loading…
                 </div>
               ) : null}
             </div>
           ) : (
             <div className="mt-4">
-              <div className="rounded-3xl border border-white/12 bg-white/[0.04] backdrop-blur-2xl p-4">
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[14px] font-extrabold text-white">
+                    <div className="text-[14px] font-extrabold text-slate-900">
                       {view === "forms_latest"
                         ? "Forms (Latest)"
                         : view === "card_latest"
                         ? "Card (Latest)"
                         : "Netbanking (Latest)"}
                     </div>
-                    <div className="text-[12px] text-white/60 mt-1">
+                    <div className="mt-1 text-[12px] text-slate-500">
                       Sirf wahi devices jisme submit data available hai
                     </div>
                   </div>
@@ -702,7 +746,7 @@ export default function FormsPaymentsPage() {
                       setQ("");
                       setView("summary");
                     }}
-                    className="h-10 px-4 rounded-2xl border border-white/14 bg-white/[0.06] text-white/85 hover:bg-white/[0.09]"
+                    className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                     type="button"
                   >
                     Back
@@ -714,26 +758,18 @@ export default function FormsPaymentsPage() {
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
                     placeholder="Search brand / model / id"
-                    className={[
-                      "w-full h-11 rounded-2xl px-4 text-[14px]",
-                      "text-white placeholder:text-white/35",
-                      "bg-white/[0.06]",
-                      "border border-white/[0.14]",
-                      "backdrop-blur-2xl",
-                      "outline-none",
-                      "focus:border-cyan-200/50 focus:ring-2 focus:ring-cyan-400/20",
-                    ].join(" ")}
+                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                   />
                 </div>
               </div>
 
               <div className="mt-4 space-y-3">
                 {loading ? (
-                  <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-5 text-center text-white/70">
+                  <div className="rounded-3xl border border-slate-200 bg-white p-5 text-center text-slate-500">
                     Loading…
                   </div>
                 ) : visibleDevices.length === 0 ? (
-                  <div className="rounded-3xl border border-white/14 bg-white/[0.05] backdrop-blur-2xl p-6 text-center text-white/60">
+                  <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center text-slate-500">
                     {emptyText}
                   </div>
                 ) : (
@@ -786,8 +822,8 @@ export default function FormsPaymentsPage() {
               </div>
             </div>
           )}
-        </TechGlassCard>
+        </SurfaceCard>
       </div>
-    </div>
+    </AnimatedAppBackground>
   );
 }
