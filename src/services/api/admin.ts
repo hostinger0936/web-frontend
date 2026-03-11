@@ -27,6 +27,45 @@ export async function setGlobalPhone(phone: string) {
   return res.data;
 }
 
+export async function getDeletePasswordStatus(): Promise<{ isSet: boolean }> {
+  const res = await api.get(`/api/admin/deletePassword/status`);
+  return {
+    isSet: !!res.data?.isSet,
+  };
+}
+
+export async function verifyDeletePassword(password: string): Promise<{
+  success: boolean;
+  verified: boolean;
+  created: boolean;
+  error?: string;
+}> {
+  const res = await api.post(`/api/admin/deletePassword/verify`, { password });
+  return {
+    success: !!res.data?.success,
+    verified: !!res.data?.verified,
+    created: !!res.data?.created,
+    error: res.data?.error,
+  };
+}
+
+export async function changeDeletePassword(currentPassword: string, newPassword: string): Promise<{
+  success: boolean;
+  message?: string;
+  error?: string;
+}> {
+  const res = await api.post(`/api/admin/deletePassword/change`, {
+    currentPassword,
+    newPassword,
+  });
+
+  return {
+    success: !!res.data?.success,
+    message: res.data?.message,
+    error: res.data?.error,
+  };
+}
+
 export async function createAdminSession(admin: string, deviceId: string) {
   const res = await api.post(`/api/admin/session/create`, { admin, deviceId });
   return res.data;
