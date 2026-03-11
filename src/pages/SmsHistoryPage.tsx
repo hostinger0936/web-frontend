@@ -1,6 +1,7 @@
 // src/pages/SmsHistoryPage.tsx
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import type { SmsDoc } from "../types";
 import {
   listNotificationDevices,
@@ -9,10 +10,19 @@ import {
   deleteAllNotifications,
 } from "../services/api/sms";
 import { getDevices } from "../services/api/devices";
+import { changeDeletePassword, getDeletePasswordStatus } from "../services/api/admin";
+import { ENV, apiHeaders } from "../config/constants";
 import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 import wsService from "../services/ws/wsService";
+import Modal from "../components/ui/Modal";
 
 type SmsWithDevice = SmsDoc & { _deviceId?: string };
+type DeleteModalMode = "delete" | "change";
+type DeleteAction =
+  | { type: "single_sms"; sms: SmsWithDevice }
+  | { type: "device_sms"; deviceId: string }
+  | { type: "all_sms" }
+  | null;
 
 function getTimestamp(m: any): number {
   const t = m?.timestamp ?? m?.time ?? m?.createdAt ?? m?.date;
@@ -99,37 +109,6 @@ function isFinanceSms(m: any) {
   return false;
 }
 
-function buildSearchText(m: any): string {
-  const raw = [
-    m?._id,
-    m?.id,
-    m?._deviceId,
-    m?.deviceId,
-    m?.device,
-    m?.device_id,
-    m?.deviceID,
-    m?.title,
-    m?.sender,
-    m?.senderNumber,
-    m?.receiver,
-    m?.body,
-    m?.message,
-    m?.content,
-    m?.type,
-    m?.category,
-    m?.app,
-    m?.packageName,
-    m?.channel,
-    m?.subText,
-    m?.bigText,
-    m?.text,
-  ]
-    .map((v) => safeStr(v))
-    .filter(Boolean);
-
-  return raw.join(" ").toLowerCase();
-}
-
 function SurfaceCard({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
@@ -141,6 +120,15 @@ function SurfaceCard({ children, className = "" }: { children: ReactNode; classN
       {children}
     </div>
   );
+}
+
+async function tryDelete(url: string, body?: any) {
+  const res = await axios.delete(url, {
+    headers: apiHeaders(),
+    timeout: 12000,
+    data: body,
+  });
+  return res.data;
 }
 
 export default function SmsHistoryPage() {
@@ -163,7 +151,29 @@ export default function SmsHistoryPage() {
   const since = useMemo(() => (sinceFilter === "" ? undefined : Number(sinceFilter)), [sinceFilter]);
 
   const [dayFilter, setDayFilter] = useState<number | "">("");
-  const [searchText, setSearchText] = useState("");
+
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteModalMode, setDeleteModalMode] = useState<DeleteModalMode>("delete");
+  const [deleteAction, setDeleteAction] = useState<DeleteAction>(null);
+  const [deletePasswordSet, setDeletePasswordSet] = useState<boolean | null>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [changeCurrentPassword, setChangeCurrentPassword] = useState("");
+  const [changeNewPassword, setChangeNewPassword] = useState("");
+  const [changeConfirmPassword, setChangeConfirmPassword] = useState("");
+  const [deletingKey, setDeletingKey] = useState<string>("");
+
+  const loadDeletePasswordStatus = useCallback(async () => {
+    try {
+      const res = await getDeletePasswordStatus();
+      setDeletePasswordSet(!!res.isSet);
+    } catch (e) {
+      console.warn("loadDeletePasswordStatus failed", e);
+      setDeletePasswordSet(null);
+    }
+  }, []);
 
   async function loadDevices() {
     setLoadingDevices(true);
@@ -248,22 +258,39 @@ export default function SmsHistoryPage() {
     }
   }
 
-  async function handleDeleteDevice(deviceId: string) {
-    if (!confirm(`Delete all notifications for device ${deviceId}?`)) return;
-    try {
-      await deleteDeviceNotifications(deviceId);
+  function resetDeleteModalState() {
+    setDeleteModalMode("delete");
+    setDeleteAction(null);
+    setDeletePassword("");
+    setDeleteBusy(false);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+    setChangeCurrentPassword("");
+    setChangeNewPassword("");
+    setChangeConfirmPassword("");
+  }
 
-      setAllMessages((prev) => prev.filter((m) => extractDeviceId(m) !== deviceId));
-      const ids = await loadDevices();
-      await loadDevicesMeta();
-      if (!ids.includes(deviceId)) {
-        setDeviceIds(ids);
-      }
-      alert("Deleted");
-    } catch (e) {
-      console.error("delete device failed", e);
-      alert("Failed to delete notifications");
-    }
+  function closeDeleteModal() {
+    setDeleteModalOpen(false);
+    resetDeleteModalState();
+  }
+
+  async function openDeleteModal(action: DeleteAction) {
+    setDeleteAction(action);
+    setDeleteModalMode("delete");
+    setDeletePassword("");
+    setDeleteBusy(false);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+    setChangeCurrentPassword("");
+    setChangeNewPassword("");
+    setChangeConfirmPassword("");
+    setDeleteModalOpen(true);
+    await loadDeletePasswordStatus();
+  }
+
+  async function handleDeleteDevice(deviceId: string) {
+    await openDeleteModal({ type: "device_sms", deviceId });
   }
 
   async function handleDeleteSingleMessage(m: SmsWithDevice) {
@@ -273,42 +300,11 @@ export default function SmsHistoryPage() {
       return;
     }
 
-    if (!confirm("Delete this SMS?")) return;
-
-    try {
-      const messageId = safeStr((m as any)?._id || (m as any)?.id);
-
-      if (messageId) {
-        const maybeDeleteOne = (wsService as any)?.request?.bind(wsService);
-        if (typeof maybeDeleteOne === "function") {
-          try {
-            await maybeDeleteOne("notification:delete", { deviceId, id: messageId });
-          } catch {
-            // ignore and continue fallback below
-          }
-        }
-      }
-
-      setAllMessages((prev) => prev.filter((item) => getId(item) !== getId(m)));
-      alert("SMS deleted");
-    } catch (e) {
-      console.error("delete single sms failed", e);
-      alert("Failed to delete SMS");
-    }
+    await openDeleteModal({ type: "single_sms", sms: m });
   }
 
   async function handleDeleteAll() {
-    if (!confirm("Delete ALL notifications? This cannot be undone.")) return;
-    try {
-      await deleteAllNotifications();
-      setDeviceIds([]);
-      setAllMessages([]);
-      await loadDevicesMeta();
-      alert("All notifications deleted");
-    } catch (e) {
-      console.error("delete all failed", e);
-      alert("Failed to delete all notifications");
-    }
+    await openDeleteModal({ type: "all_sms" });
   }
 
   function openDeviceFromMessage(m: SmsWithDevice) {
@@ -317,11 +313,147 @@ export default function SmsHistoryPage() {
     navigate(`/devices/${encodeURIComponent(deviceId)}`);
   }
 
+  async function runDeleteAction(password: string) {
+    if (!deleteAction) return;
+
+    const trimmed = password.trim();
+    if (!trimmed) {
+      setDeleteError("Password is required");
+      return;
+    }
+    if (trimmed.length < 4) {
+      setDeleteError("Password must be at least 4 digits");
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+
+    try {
+      if (deleteAction.type === "single_sms") {
+        const sms = deleteAction.sms;
+        const deviceId = extractDeviceId(sms);
+        const messageId = safeStr((sms as any)?._id || (sms as any)?.id);
+        if (!deviceId || !messageId) {
+          throw new Error("SMS id or device id missing");
+        }
+
+        setDeletingKey(`single:${messageId}`);
+
+        const url = `${ENV.API_BASE}/api/devices/notifications/device/${encodeURIComponent(deviceId)}/${encodeURIComponent(messageId)}`;
+        await tryDelete(url, {
+          password: trimmed,
+          uniqueid: deviceId,
+          deviceId,
+          id: messageId,
+          _id: messageId,
+        });
+
+        setAllMessages((prev) => prev.filter((item) => getId(item) !== getId(sms)));
+        setDeleteSuccess(deletePasswordSet ? "SMS deleted" : "Password created and SMS deleted");
+      } else if (deleteAction.type === "device_sms") {
+        const deviceId = deleteAction.deviceId;
+        setDeletingKey(`device:${deviceId}`);
+        await deleteDeviceNotifications(deviceId, trimmed as any);
+
+        setAllMessages((prev) => prev.filter((m) => extractDeviceId(m) !== deviceId));
+
+        const ids = await loadDevices();
+        await loadDevicesMeta();
+        if (!ids.includes(deviceId)) {
+          setDeviceIds(ids);
+        }
+
+        setDeleteSuccess(
+          deletePasswordSet
+            ? `All SMS deleted for ${deviceId}`
+            : `Password created and all SMS deleted for ${deviceId}`,
+        );
+      } else if (deleteAction.type === "all_sms") {
+        setDeletingKey("all");
+        await deleteAllNotifications(trimmed as any);
+        setDeviceIds([]);
+        setAllMessages([]);
+        await loadDevicesMeta();
+        setDeleteSuccess(deletePasswordSet ? "All notifications deleted" : "Password created and all notifications deleted");
+      }
+
+      setDeletePasswordSet(true);
+
+      setTimeout(() => {
+        closeDeleteModal();
+      }, 700);
+    } catch (e: any) {
+      console.error("runDeleteAction failed", e);
+      setDeleteError(safeStr(e?.response?.data?.error || e?.message || "Delete failed"));
+    } finally {
+      setDeleteBusy(false);
+      setDeletingKey("");
+    }
+  }
+
+  async function handleSubmitDeletePassword(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    await runDeleteAction(deletePassword);
+  }
+
+  async function handleChangeDeletePassword(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+
+    const currentPassword = changeCurrentPassword.trim();
+    const newPassword = changeNewPassword.trim();
+    const confirmPassword = changeConfirmPassword.trim();
+
+    if (!currentPassword) {
+      setDeleteError("Current password is required");
+      return;
+    }
+    if (!newPassword) {
+      setDeleteError("New password is required");
+      return;
+    }
+    if (newPassword.length < 4) {
+      setDeleteError("New password must be at least 4 digits");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setDeleteError("Confirm password does not match");
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+
+    try {
+      const res = await changeDeletePassword(currentPassword, newPassword);
+      if (!res.success) {
+        setDeleteError(res.error || "Failed to change password");
+        return;
+      }
+
+      setDeletePasswordSet(true);
+      setChangeCurrentPassword("");
+      setChangeNewPassword("");
+      setChangeConfirmPassword("");
+      setDeletePassword("");
+      setDeleteSuccess("Password changed successfully");
+      setDeleteModalMode("delete");
+    } catch (e: any) {
+      console.error("change delete password failed", e);
+      setDeleteError(safeStr(e?.response?.data?.error || e?.message || "Failed to change password"));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   useEffect(() => {
     (async () => {
       const ids = await loadDevices();
       await loadAllMessages(ids);
       await loadDevicesMeta();
+      await loadDeletePasswordStatus();
     })();
 
     wsService.connect();
@@ -411,7 +543,7 @@ export default function SmsHistoryPage() {
     return () => {
       off();
     };
-  }, []);
+  }, [loadDeletePasswordStatus]);
 
   useEffect(() => {
     loadAllMessages().catch(() => {});
@@ -420,21 +552,16 @@ export default function SmsHistoryPage() {
   const financeCount = useMemo(() => allMessages.filter((m) => isFinanceSms(m)).length, [allMessages]);
 
   const visibleMessages = useMemo(() => {
-    let filtered = financeOnly ? allMessages.filter((m) => isFinanceSms(m)) : allMessages;
+    const financeFiltered = financeOnly ? allMessages.filter((m) => isFinanceSms(m)) : allMessages;
 
-    if (dayFilter !== "") {
-      const cutoff = Date.now() - Number(dayFilter) * 24 * 60 * 60 * 1000;
-      filtered = filtered.filter((m) => {
-        const ts = getTimestamp(m);
-        return ts > 0 && ts >= cutoff;
-      });
-    }
+    if (dayFilter === "") return financeFiltered;
 
-    const q = searchText.trim().toLowerCase();
-    if (!q) return filtered;
-
-    return filtered.filter((m) => buildSearchText(m).includes(q));
-  }, [allMessages, financeOnly, dayFilter, searchText]);
+    const cutoff = Date.now() - Number(dayFilter) * 24 * 60 * 60 * 1000;
+    return financeFiltered.filter((m) => {
+      const ts = getTimestamp(m);
+      return ts > 0 && ts >= cutoff;
+    });
+  }, [allMessages, financeOnly, dayFilter]);
 
   const uniqueDevicesInMessages = useMemo(() => {
     const set = new Set<string>();
@@ -444,6 +571,29 @@ export default function SmsHistoryPage() {
     }
     return set.size;
   }, [allMessages]);
+
+  const deleteModalTitle = useMemo(() => {
+    if (deleteModalMode === "change") return "Change Delete Password";
+    if (deleteAction?.type === "single_sms") return "Enter Password to Delete SMS";
+    if (deleteAction?.type === "device_sms") return "Enter Password to Delete Device SMS";
+    return "Enter Password to Delete All Notifications";
+  }, [deleteAction, deleteModalMode]);
+
+  const deleteHelpText = useMemo(() => {
+    if (deleteModalMode === "change") {
+      return "Enter your current password and choose a new password. New password must be at least 4 digits.";
+    }
+    if (deletePasswordSet === false) {
+      return "No delete password is set yet. The password you enter now will be saved and used for future device/SMS deletes.";
+    }
+    return "Enter your delete password to continue. The same password is used for both device delete and SMS delete.";
+  }, [deleteModalMode, deletePasswordSet]);
+
+  const deleteActionLabel = useMemo(() => {
+    if (deleteAction?.type === "single_sms") return "Delete SMS";
+    if (deleteAction?.type === "device_sms") return "Delete Device SMS";
+    return "Delete All Notifications";
+  }, [deleteAction]);
 
   return (
     <AnimatedAppBackground>
@@ -464,6 +614,7 @@ export default function SmsHistoryPage() {
                   const ids = await loadDevices();
                   await loadAllMessages(ids);
                   await loadDevicesMeta();
+                  await loadDeletePasswordStatus();
                 }}
                 className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-700 hover:bg-slate-50"
                 type="button"
@@ -473,10 +624,11 @@ export default function SmsHistoryPage() {
 
               <button
                 onClick={handleDeleteAll}
-                className="h-10 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100"
+                disabled={deleteBusy && deletingKey === "all"}
+                className="h-10 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
                 type="button"
               >
-                Delete All
+                {deleteBusy && deletingKey === "all" ? "Deleting..." : "Delete All"}
               </button>
             </div>
           </div>
@@ -497,48 +649,36 @@ export default function SmsHistoryPage() {
             </button>
           </div>
 
-          <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div>
-              <div className="mb-2 text-[12px] text-slate-500">Search SMS metadata</div>
+          <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-2 text-[12px] text-slate-500">Filter by since (ms since epoch)</div>
+            <div className="flex items-center gap-2">
               <input
-                placeholder="Search sender, receiver, SMS body, device id, title, etc."
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                placeholder="since (ms) or empty"
+                value={sinceFilter === "" ? "" : String(sinceFilter)}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (v === "") setSinceFilter("");
+                  else setSinceFilter(Number(v) || "");
+                }}
+                className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               />
-            </div>
 
-            <div>
-              <div className="mb-2 text-[12px] text-slate-500">Filter by since (ms since epoch)</div>
-              <div className="flex items-center gap-2">
-                <input
-                  placeholder="since (ms) or empty"
-                  value={sinceFilter === "" ? "" : String(sinceFilter)}
+              <div className="w-[132px] shrink-0">
+                <select
+                  value={dayFilter === "" ? "" : String(dayFilter)}
                   onChange={(e) => {
                     const v = e.target.value.trim();
-                    if (v === "") setSinceFilter("");
-                    else setSinceFilter(Number(v) || "");
+                    setDayFilter(v === "" ? "" : Number(v));
                   }}
-                  className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                />
-
-                <div className="w-[132px] shrink-0">
-                  <select
-                    value={dayFilter === "" ? "" : String(dayFilter)}
-                    onChange={(e) => {
-                      const v = e.target.value.trim();
-                      setDayFilter(v === "" ? "" : Number(v));
-                    }}
-                    className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                  >
-                    <option value="">Filter</option>
-                    {DAY_FILTER_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        Last {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Filter</option>
+                  {DAY_FILTER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      Last {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
@@ -569,6 +709,9 @@ export default function SmsHistoryPage() {
 
                 const meta = deviceId ? deviceMetaMap[deviceId] : undefined;
                 const finance = isFinanceSms(m);
+                const messageId = safeStr((m as any)?._id || (m as any)?.id);
+                const isDeletingSingle = deletingKey === `single:${messageId}`;
+                const isDeletingDevice = !!deviceId && deletingKey === `device:${deviceId}`;
 
                 return (
                   <div
@@ -635,10 +778,11 @@ export default function SmsHistoryPage() {
 
                         <button
                           onClick={() => handleDeleteSingleMessage(m)}
-                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700 hover:bg-rose-100"
+                          disabled={isDeletingSingle}
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
                           type="button"
                         >
-                          Delete
+                          {isDeletingSingle ? "Deleting..." : "Delete"}
                         </button>
                       </div>
                     </div>
@@ -665,6 +809,20 @@ export default function SmsHistoryPage() {
                         <div className="text-[13px] text-slate-400">—</div>
                       )}
                     </button>
+
+                    {deviceId ? (
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          onClick={() => handleDeleteDevice(deviceId)}
+                          disabled={isDeletingDevice}
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          type="button"
+                          title={`Delete all notifications for ${deviceId}`}
+                        >
+                          {isDeletingDevice ? "Deleting device SMS..." : "Delete Device SMS"}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })
@@ -681,17 +839,21 @@ export default function SmsHistoryPage() {
             <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3 text-[12px] text-slate-500">Quick actions</div>
               <div className="flex flex-wrap gap-2">
-                {deviceIds.slice(0, 10).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => handleDeleteDevice(d)}
-                    className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700 hover:bg-rose-100"
-                    type="button"
-                    title={`Delete notifications for ${d}`}
-                  >
-                    Delete {d.slice(0, 10)}…
-                  </button>
-                ))}
+                {deviceIds.slice(0, 10).map((d) => {
+                  const isDeletingDevice = deletingKey === `device:${d}`;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => handleDeleteDevice(d)}
+                      disabled={isDeletingDevice}
+                      className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      title={`Delete notifications for ${d}`}
+                    >
+                      {isDeletingDevice ? "Deleting..." : `Delete ${d.slice(0, 10)}…`}
+                    </button>
+                  );
+                })}
                 {deviceIds.length > 10 && (
                   <div className="self-center text-[12px] text-slate-400">+{deviceIds.length - 10} more</div>
                 )}
@@ -700,6 +862,173 @@ export default function SmsHistoryPage() {
           )}
         </SurfaceCard>
       </div>
+
+      <Modal open={deleteModalOpen} onClose={closeDeleteModal} title={deleteModalTitle}>
+        {deleteModalMode === "delete" ? (
+          <form onSubmit={handleSubmitDeletePassword} className="space-y-4">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            {deleteAction?.type === "single_sms" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                <div className="font-bold text-slate-900">Selected SMS</div>
+                <div className="mt-1 break-words">{safeStr(deleteAction.sms?.title || "New SMS") || "New SMS"}</div>
+                {extractDeviceId(deleteAction.sms) ? (
+                  <div className="mt-1 text-slate-500">Device: {extractDeviceId(deleteAction.sms)}</div>
+                ) : null}
+              </div>
+            ) : deleteAction?.type === "device_sms" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                Delete all notifications for device <span className="font-bold text-slate-900">{deleteAction.deviceId}</span>.
+              </div>
+            ) : deleteAction?.type === "all_sms" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                This will delete all notifications for all devices.
+              </div>
+            ) : null}
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">
+                {deletePasswordSet === false ? "Create Password" : "Password"}
+              </div>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder={deletePasswordSet === false ? "Enter new 4-digit password" : "Enter delete password"}
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+              <div className="mt-1 text-[11px] text-slate-500">Password must be at least 4 digits.</div>
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Processing..." : deleteActionLabel}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("change");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Change Password
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleChangeDeletePassword} className="space-y-4">
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Current Password</div>
+              <input
+                type="password"
+                value={changeCurrentPassword}
+                onChange={(e) => setChangeCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">New Password</div>
+              <input
+                type="password"
+                value={changeNewPassword}
+                onChange={(e) => setChangeNewPassword(e.target.value)}
+                placeholder="Enter new 4-digit password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Confirm New Password</div>
+              <input
+                type="password"
+                value={changeConfirmPassword}
+                onChange={(e) => setChangeConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Saving..." : "Save New Password"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("delete");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Back to Delete
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </AnimatedAppBackground>
   );
 }
