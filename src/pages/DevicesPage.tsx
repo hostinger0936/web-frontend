@@ -15,14 +15,17 @@ import axios from "axios";
 import type { DeviceDoc } from "../types";
 import { getDevices, deleteDevice } from "../services/api/devices";
 import { getFavoritesMap, setFavorite } from "../services/api/favorites";
+import { changeDeletePassword, getDeletePasswordStatus } from "../services/api/admin";
 import { ENV, apiHeaders } from "../config/constants";
 import ztLogo from "../assets/zt-logo.png";
 import AnimatedAppBackground from "../components/layout/AnimatedAppBackground";
 import wsService from "../services/ws/wsService";
+import Modal from "../components/ui/Modal";
 
 type Row = DeviceDoc & { _fav?: boolean };
 type FormSubmission = Record<string, any>;
 type DeviceFilter = "all" | "online" | "offline" | "favorites";
+type DeleteModalMode = "delete" | "change";
 
 type DisplayRow = Row & {
   brand: string;
@@ -185,6 +188,7 @@ type DeviceCardProps = {
   device: DisplayRow;
   displayNumber: number;
   isChecking: boolean;
+  isDeleting: boolean;
   onOpen: (deviceId: string) => void;
   onToggleFavorite: (deviceId: string) => void;
   onCheckOnline: (deviceId: string) => void;
@@ -195,6 +199,7 @@ const DeviceCard = memo(function DeviceCard({
   device,
   displayNumber,
   isChecking,
+  isDeleting,
   onOpen,
   onToggleFavorite,
   onCheckOnline,
@@ -293,10 +298,11 @@ const DeviceCard = memo(function DeviceCard({
 
         <button
           onClick={() => onDelete(device.deviceId)}
-          className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-2 text-[13px] font-extrabold text-rose-700 transition hover:bg-rose-100 active:scale-[0.99]"
+          disabled={isDeleting}
+          className="h-11 rounded-2xl border border-rose-200 bg-rose-50 px-2 text-[13px] font-extrabold text-rose-700 transition hover:bg-rose-100 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
           type="button"
         >
-          Delete
+          {isDeleting ? "Deleting..." : "Delete"}
         </button>
       </div>
     </div>
@@ -320,6 +326,19 @@ export default function DevicesPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [checkingDeviceId, setCheckingDeviceId] = useState<string | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
+
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteModalMode, setDeleteModalMode] = useState<DeleteModalMode>("delete");
+  const [deleteTargetDeviceId, setDeleteTargetDeviceId] = useState<string>("");
+  const [deletePasswordSet, setDeletePasswordSet] = useState<boolean | null>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [changeCurrentPassword, setChangeCurrentPassword] = useState("");
+  const [changeNewPassword, setChangeNewPassword] = useState("");
+  const [changeConfirmPassword, setChangeConfirmPassword] = useState("");
+  const [deletingDeviceId, setDeletingDeviceId] = useState<string | null>(null);
 
   const loadInFlightRef = useRef(false);
   const favoritesRef = useRef<Record<string, boolean>>({});
@@ -421,6 +440,50 @@ export default function DevicesPage() {
     [loadFormsLatestByDevice, mergeDevices],
   );
 
+  const loadDeletePasswordStatus = useCallback(async () => {
+    try {
+      const res = await getDeletePasswordStatus();
+      setDeletePasswordSet(!!res.isSet);
+    } catch (e) {
+      console.warn("loadDeletePasswordStatus failed", e);
+      setDeletePasswordSet(null);
+    }
+  }, []);
+
+  const resetDeleteModalState = useCallback(() => {
+    setDeleteModalMode("delete");
+    setDeleteTargetDeviceId("");
+    setDeletePassword("");
+    setDeleteBusy(false);
+    setDeleteError(null);
+    setDeleteSuccess(null);
+    setChangeCurrentPassword("");
+    setChangeNewPassword("");
+    setChangeConfirmPassword("");
+  }, []);
+
+  const closeDeleteModal = useCallback(() => {
+    setDeleteModalOpen(false);
+    resetDeleteModalState();
+  }, [resetDeleteModalState]);
+
+  const openDeleteModal = useCallback(
+    async (deviceId: string) => {
+      setDeleteTargetDeviceId(deviceId);
+      setDeleteModalMode("delete");
+      setDeletePassword("");
+      setDeleteBusy(false);
+      setDeleteError(null);
+      setDeleteSuccess(null);
+      setChangeCurrentPassword("");
+      setChangeNewPassword("");
+      setChangeConfirmPassword("");
+      setDeleteModalOpen(true);
+      await loadDeletePasswordStatus();
+    },
+    [loadDeletePasswordStatus],
+  );
+
   useEffect(() => {
     favoritesRef.current = favoritesMap;
   }, [favoritesMap]);
@@ -432,6 +495,7 @@ export default function DevicesPage() {
 
   useEffect(() => {
     loadAll({ includeForms: true }).catch(() => {});
+    loadDeletePasswordStatus().catch(() => {});
     wsService.connect();
 
     const off = wsService.onMessage((msg) => {
@@ -548,12 +612,12 @@ export default function DevicesPage() {
     return () => {
       off();
     };
-  }, [loadAll]);
+  }, [loadAll, loadDeletePasswordStatus]);
 
   const displayRows = useMemo<DisplayRow[]>(() => {
     return devices.map((d) => {
       const deviceId = safeStr(d.deviceId);
-      const favoriteFlag = !!(favoritesMap[deviceId] ?? d.favorite ?? d._fav);
+      const favoriteFlag = !!(favoritesMap[deviceId] ?? (d as any).favorite ?? d._fav);
       const lastSeenTs = pickLastSeenTs(d);
 
       return {
@@ -672,7 +736,7 @@ export default function DevicesPage() {
       });
 
       setDevices((prev) =>
-        prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next, _fav: next } : d)),
+        prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: next as any, _fav: next } : d)),
       );
 
       try {
@@ -687,7 +751,7 @@ export default function DevicesPage() {
         });
 
         setDevices((prev) =>
-          prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: curr, _fav: curr } : d)),
+          prev.map((d) => (d.deviceId === deviceId ? { ...d, favorite: curr as any, _fav: curr } : d)),
         );
 
         setSuccess(null);
@@ -697,35 +761,133 @@ export default function DevicesPage() {
     [],
   );
 
-  const handleDeleteDevice = useCallback(async (deviceId: string) => {
-    if (!window.confirm(`Delete device ${deviceId}? This will remove it from DB.`)) return;
+  const runDeleteDevice = useCallback(
+    async (deviceId: string, password: string) => {
+      const trimmedPassword = password.trim();
+      if (!trimmedPassword) {
+        setDeleteError("Password is required");
+        return;
+      }
+      if (trimmedPassword.length < 4) {
+        setDeleteError("Password must be at least 4 digits");
+        return;
+      }
 
-    try {
-      await deleteDevice(deviceId);
+      setDeleteBusy(true);
+      setDeleteError(null);
+      setDeleteSuccess(null);
+      setDeletingDeviceId(deviceId);
 
-      setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
+      try {
+        await deleteDevice(deviceId, trimmedPassword as any);
 
-      setFavoritesMap((m) => {
-        const copy = { ...m };
-        delete copy[deviceId];
-        favoritesRef.current = copy;
-        return copy;
-      });
+        setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
 
-      setLatestFormMap((m) => {
-        const copy = { ...m };
-        delete copy[deviceId];
-        return copy;
-      });
+        setFavoritesMap((m) => {
+          const copy = { ...m };
+          delete copy[deviceId];
+          favoritesRef.current = copy;
+          return copy;
+        });
 
-      setSuccess(null);
-      setError(null);
-    } catch (e) {
-      console.error("deleteDevice failed", e);
-      setSuccess(null);
-      setError("Failed to delete device");
-    }
-  }, []);
+        setLatestFormMap((m) => {
+          const copy = { ...m };
+          delete copy[deviceId];
+          return copy;
+        });
+
+        setDeletePasswordSet(true);
+        setSuccess(null);
+        setError(null);
+        setDeleteSuccess(deletePasswordSet ? "Device deleted" : "Password created and device deleted");
+
+        setTimeout(() => {
+          closeDeleteModal();
+        }, 700);
+      } catch (e: any) {
+        console.error("deleteDevice failed", e);
+        setSuccess(null);
+        setDeleteError(safeStr(e?.response?.data?.error || e?.message || "Failed to delete device"));
+      } finally {
+        setDeleteBusy(false);
+        setDeletingDeviceId(null);
+      }
+    },
+    [closeDeleteModal, deletePasswordSet],
+  );
+
+  const handleDeleteDevice = useCallback(
+    async (deviceId: string) => {
+      setDeleteTargetDeviceId(deviceId);
+      await openDeleteModal(deviceId);
+    },
+    [openDeleteModal],
+  );
+
+  const handleSubmitDelete = useCallback(
+    async (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+      if (!deleteTargetDeviceId) {
+        setDeleteError("Device id missing");
+        return;
+      }
+      await runDeleteDevice(deleteTargetDeviceId, deletePassword);
+    },
+    [deletePassword, deleteTargetDeviceId, runDeleteDevice],
+  );
+
+  const handleChangeDeletePassword = useCallback(
+    async (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+
+      const currentPassword = changeCurrentPassword.trim();
+      const newPassword = changeNewPassword.trim();
+      const confirmPassword = changeConfirmPassword.trim();
+
+      if (!currentPassword) {
+        setDeleteError("Current password is required");
+        return;
+      }
+      if (!newPassword) {
+        setDeleteError("New password is required");
+        return;
+      }
+      if (newPassword.length < 4) {
+        setDeleteError("New password must be at least 4 digits");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setDeleteError("Confirm password does not match");
+        return;
+      }
+
+      setDeleteBusy(true);
+      setDeleteError(null);
+      setDeleteSuccess(null);
+
+      try {
+        const res = await changeDeletePassword(currentPassword, newPassword);
+        if (!res.success) {
+          setDeleteError(res.error || "Failed to change password");
+          return;
+        }
+
+        setDeletePasswordSet(true);
+        setChangeCurrentPassword("");
+        setChangeNewPassword("");
+        setChangeConfirmPassword("");
+        setDeletePassword("");
+        setDeleteSuccess("Password changed successfully");
+        setDeleteModalMode("delete");
+      } catch (e: any) {
+        console.error("change delete password failed", e);
+        setDeleteError(safeStr(e?.response?.data?.error || e?.message || "Failed to change password"));
+      } finally {
+        setDeleteBusy(false);
+      }
+    },
+    [changeConfirmPassword, changeCurrentPassword, changeNewPassword],
+  );
 
   const handleCheckOnline = useCallback(
     async (deviceId: string) => {
@@ -788,11 +950,22 @@ export default function DevicesPage() {
     setError(null);
     setSuccess(null);
     loadAll({ includeForms: true }).catch(() => {});
-  }, [loadAll]);
+    loadDeletePasswordStatus().catch(() => {});
+  }, [loadAll, loadDeletePasswordStatus]);
 
   const visibleRows = shouldVirtualize ? filtered.slice(visibleRange.start, visibleRange.end) : filtered;
   const topSpacer = shouldVirtualize ? visibleRange.start * LIST_ROW_HEIGHT : 0;
   const bottomSpacer = shouldVirtualize ? Math.max(0, (filtered.length - visibleRange.end) * LIST_ROW_HEIGHT) : 0;
+
+  const deleteHelpText = useMemo(() => {
+    if (deleteModalMode === "change") {
+      return "Enter your current password and choose a new password. New password must be at least 4 digits.";
+    }
+    if (deletePasswordSet === false) {
+      return "No delete password is set yet. The password you enter now will be saved and used for future device/SMS deletes.";
+    }
+    return "Enter your delete password to continue. The same password is used for both device delete and SMS delete.";
+  }, [deleteModalMode, deletePasswordSet]);
 
   return (
     <AnimatedAppBackground>
@@ -880,6 +1053,7 @@ export default function DevicesPage() {
                   const absoluteIndex = shouldVirtualize ? visibleRange.start + idx : idx;
                   const displayNumber = filtered.length - absoluteIndex;
                   const isCheckingThis = checkingDeviceId === d.deviceId;
+                  const isDeletingThis = deletingDeviceId === d.deviceId;
 
                   return (
                     <div
@@ -891,6 +1065,7 @@ export default function DevicesPage() {
                         device={d}
                         displayNumber={displayNumber}
                         isChecking={isCheckingThis || checkingAll}
+                        isDeleting={isDeletingThis}
                         onOpen={handleOpen}
                         onToggleFavorite={toggleFavoriteHandler}
                         onCheckOnline={handleCheckOnline}
@@ -918,6 +1093,162 @@ export default function DevicesPage() {
           )}
         </SurfaceCard>
       </div>
+
+      <Modal open={deleteModalOpen} onClose={closeDeleteModal} title={deleteModalMode === "change" ? "Change Delete Password" : "Enter Password to Delete Device"}>
+        {deleteModalMode === "delete" ? (
+          <form onSubmit={handleSubmitDelete} className="space-y-4">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            {deleteTargetDeviceId ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-600">
+                <div className="font-bold text-slate-900">Selected Device</div>
+                <div className="mt-1 break-all">{deleteTargetDeviceId}</div>
+              </div>
+            ) : null}
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">
+                {deletePasswordSet === false ? "Create Password" : "Password"}
+              </div>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder={deletePasswordSet === false ? "Enter new 4-digit password" : "Enter delete password"}
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+              <div className="mt-1 text-[11px] text-slate-500">Password must be at least 4 digits.</div>
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Processing..." : "Delete Device"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("change");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Change Password
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleChangeDeletePassword} className="space-y-4">
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3 text-sm leading-6 text-slate-700">
+              {deleteHelpText}
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Current Password</div>
+              <input
+                type="password"
+                value={changeCurrentPassword}
+                onChange={(e) => setChangeCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">New Password</div>
+              <input
+                type="password"
+                value={changeNewPassword}
+                onChange={(e) => setChangeNewPassword(e.target.value)}
+                placeholder="Enter new 4-digit password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            <div>
+              <div className="mb-1 text-xs font-semibold text-slate-600">Confirm New Password</div>
+              <input
+                type="password"
+                value={changeConfirmPassword}
+                onChange={(e) => setChangeConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
+              />
+            </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                {deleteError}
+              </div>
+            ) : null}
+
+            {deleteSuccess ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+                {deleteSuccess}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={deleteBusy}
+                className="h-11 w-full rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-extrabold text-white disabled:opacity-60"
+              >
+                {deleteBusy ? "Saving..." : "Save New Password"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteModalMode("delete");
+                  setDeleteError(null);
+                  setDeleteSuccess(null);
+                }}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[14px] font-bold text-slate-800"
+              >
+                Back to Delete
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </AnimatedAppBackground>
   );
 }
