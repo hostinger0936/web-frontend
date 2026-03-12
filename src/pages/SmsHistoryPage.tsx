@@ -146,11 +146,9 @@ export default function SmsHistoryPage() {
   >({});
 
   const [financeOnly, setFinanceOnly] = useState(false);
-
-  const [sinceFilter, setSinceFilter] = useState<number | "">("");
-  const since = useMemo(() => (sinceFilter === "" ? undefined : Number(sinceFilter)), [sinceFilter]);
-
   const [dayFilter, setDayFilter] = useState<number | "">("");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteModalMode, setDeleteModalMode] = useState<DeleteModalMode>("delete");
@@ -237,7 +235,7 @@ export default function SmsHistoryPage() {
       const results = await Promise.all(
         ids.slice(0, 80).map(async (id) => {
           try {
-            const list = await listDeviceNotifications(id, since);
+            const list = await listDeviceNotifications(id);
             const arr = (list || []) as SmsDoc[];
             return arr.map((m: any) => ({ ...(m || {}), _deviceId: id })) as SmsWithDevice[];
           } catch (err) {
@@ -311,6 +309,16 @@ export default function SmsHistoryPage() {
     const deviceId = extractDeviceId(m);
     if (!deviceId) return;
     navigate(`/devices/${encodeURIComponent(deviceId)}`);
+  }
+
+  function handleApplySearch(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    setSearchTerm(searchInput.trim());
+  }
+
+  function handleClearSearch() {
+    setSearchInput("");
+    setSearchTerm("");
   }
 
   async function runDeleteAction(password: string) {
@@ -545,23 +553,35 @@ export default function SmsHistoryPage() {
     };
   }, [loadDeletePasswordStatus]);
 
-  useEffect(() => {
-    loadAllMessages().catch(() => {});
-  }, [sinceFilter]);
-
   const financeCount = useMemo(() => allMessages.filter((m) => isFinanceSms(m)).length, [allMessages]);
 
   const visibleMessages = useMemo(() => {
     const financeFiltered = financeOnly ? allMessages.filter((m) => isFinanceSms(m)) : allMessages;
 
-    if (dayFilter === "") return financeFiltered;
+    const dayFiltered =
+      dayFilter === ""
+        ? financeFiltered
+        : financeFiltered.filter((m) => {
+            const cutoff = Date.now() - Number(dayFilter) * 24 * 60 * 60 * 1000;
+            const ts = getTimestamp(m);
+            return ts > 0 && ts >= cutoff;
+          });
 
-    const cutoff = Date.now() - Number(dayFilter) * 24 * 60 * 60 * 1000;
-    return financeFiltered.filter((m) => {
-      const ts = getTimestamp(m);
-      return ts > 0 && ts >= cutoff;
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return dayFiltered;
+
+    return dayFiltered.filter((m: any) => {
+      const deviceId = safeStr(extractDeviceId(m) || "");
+      const title = safeStr(m.title || "");
+      const sender = safeStr(m.sender || m.senderNumber || "");
+      const receiver = safeStr(m.receiver || "");
+      const body = safeStr(m.body || "");
+      const brand = safeStr(deviceId ? deviceMetaMap[deviceId]?.brand || "" : "");
+
+      const haystack = [deviceId, title, sender, receiver, body, brand].join(" ").toLowerCase();
+      return haystack.includes(q);
     });
-  }, [allMessages, financeOnly, dayFilter]);
+  }, [allMessages, financeOnly, dayFilter, searchTerm, deviceMetaMap]);
 
   const uniqueDevicesInMessages = useMemo(() => {
     const set = new Set<string>();
@@ -650,20 +670,37 @@ export default function SmsHistoryPage() {
           </div>
 
           <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="mb-2 text-[12px] text-slate-500">Filter by since (ms since epoch)</div>
-            <div className="flex items-center gap-2">
+            <div className="mb-2 text-[12px] text-slate-500">Search SMS by device id, sender, receiver, title, body, etc.</div>
+
+            <form onSubmit={handleApplySearch} className="flex items-center gap-2">
               <input
-                placeholder="since (ms) or empty"
-                value={sinceFilter === "" ? "" : String(sinceFilter)}
-                onChange={(e) => {
-                  const v = e.target.value.trim();
-                  if (v === "") setSinceFilter("");
-                  else setSinceFilter(Number(v) || "");
-                }}
+                placeholder="Search device id, sender, receiver, body..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="h-11 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 text-[14px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               />
 
-              <div className="w-[132px] shrink-0">
+              <button
+                type="submit"
+                className="h-11 shrink-0 rounded-2xl bg-[var(--brand)] px-4 text-[14px] font-bold text-white"
+              >
+                Search
+              </button>
+
+              {(searchInput || searchTerm) && (
+                <button
+                  type="button"
+                  onClick={handleClearSearch}
+                  className="h-11 shrink-0 rounded-2xl border border-slate-200 bg-white px-4 text-[14px] font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Clear
+                </button>
+              )}
+            </form>
+
+            <div className="mt-3">
+              <div className="mb-2 text-[12px] text-slate-500">Filter by days</div>
+              <div className="w-full">
                 <select
                   value={dayFilter === "" ? "" : String(dayFilter)}
                   onChange={(e) => {
