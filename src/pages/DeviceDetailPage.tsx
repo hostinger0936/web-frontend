@@ -1178,6 +1178,14 @@ export default function DeviceDetailPage() {
     return "Enter your delete password to continue. The same password is used for both device delete and SMS delete.";
   }, [deleteModalMode, deletePasswordSet]);
 
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      nav(-1);
+      return;
+    }
+    nav("/devices");
+  };
+
   if (!did) return <div className="p-6">Missing device id</div>;
 
   return (
@@ -1197,7 +1205,7 @@ export default function DeviceDetailPage() {
 
             <div className="flex shrink-0 items-center gap-2">
               <button
-                onClick={() => nav("/devices")}
+                onClick={handleBack}
                 className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-slate-800 hover:bg-slate-50"
                 type="button"
               >
@@ -1382,7 +1390,11 @@ export default function DeviceDetailPage() {
                         const body = safeString(m.body || "").trim();
                         const ts = getTimestamp(m);
                         const smsId = safeString(m._id || m.id).trim();
-                        const isDeleting = deletingSmsId === smsId || (deleteBusy && deleteAction?.type === "single_sms" && safeString(deleteAction?.sms?._id ?? deleteAction?.sms?.id).trim() === smsId);
+                        const isDeleting =
+                          deletingSmsId === smsId ||
+                          (deleteBusy &&
+                            deleteAction?.type === "single_sms" &&
+                            safeString(deleteAction?.sms?._id ?? deleteAction?.sms?.id).trim() === smsId);
 
                         return (
                           <div
