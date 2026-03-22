@@ -945,7 +945,6 @@ export default function DeviceDetailPage() {
       setReceiver("");
       setMessageBody("");
       setSendOpen(false);
-      alert("SMS command sent (WS)");
     } catch (err) {
       console.error("sendSms ws failed", err);
       alert("WebSocket not connected — SMS command not sent");
